@@ -1,0 +1,52 @@
+Analog Devices no-OS license
+============================
+
+This crate is a Rust port of the AD9361 driver and the AXI ADC/DAC core drivers of the Analog
+Devices no-OS repository (https://github.com/analogdevicesinc/no-OS): the structure, the
+algorithms, the register definitions and the tables all follow those sources. The port stays
+covered by the license of the files it is derived from, which is the following 3-clause BSD
+license. The source files it was derived from carry these copyright notices:
+
+  Copyright 2013(c) Analog Devices, Inc.
+    drivers/rf-transceiver/ad9361/ad9361_api.c, ad9361_api.h, ad9361_util.c, ad9361_util.h
+    projects/ad9361/src/main.c
+
+  Copyright 2014(c) Analog Devices, Inc.
+    drivers/rf-transceiver/ad9361/ad9361.h
+
+  Copyright 2014-2015(c) Analog Devices, Inc.
+    drivers/rf-transceiver/ad9361/ad9361.c
+
+  Copyright 2018(c) Analog Devices, Inc.
+    drivers/axi_core/axi_adc_core/axi_adc_core.c
+    drivers/axi_core/axi_dac_core/axi_dac_core.c
+
+The register definitions (registers.rs), the gain tables (gain_tables.rs) and the synthesizer
+look-up tables (synth_lut.rs) are generated from ad9361.h and ad9361.c by the scripts in tools/.
+
+-------------------------------------------------------------------------------
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of Analog Devices, Inc. nor the names of its
+   contributors may be used to endorse or promote products derived from this
+   software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY ANALOG DEVICES, INC. “AS IS” AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+EVENT SHALL ANALOG DEVICES, INC. BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

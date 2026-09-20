@@ -1,0 +1,19 @@
+[package]
+name = "ad9361"
+version = "0.1.0"
+description = "AD9361 RF transceiver driver, ported from the no-OS driver"
+edition = "2024"
+license = "MIT AND BSD-3-Clause"
+readme = "README.md"
+
+[dependencies]
+arbitrary-int = "2.2.0"
+bitbybit = "2.0.1"
+axi-ad9361 = { path = "../axi-hdl-rs/axi-ad9361" }
+embassy-time = "0.5"
+embedded-hal = "1"
+fugit = "0.5"
+log = "0.4"
+
+[dev-dependencies]
+embassy-time = { version = "0.5", features = ["mock-driver", "tick-hz-1_000_000"] }
