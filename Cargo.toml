@@ -9,7 +9,7 @@ readme = "README.md"
 [dependencies]
 arbitrary-int = "2.2.0"
 bitbybit = "2.0.1"
-axi-ad9361 = { path = "../axi-hdl-rs/axi-ad9361" }
+axi-ad9361 = { path = "../axi-hdl-rs/axi-ad9361", version = "0.1.0" }
 embassy-time = "0.5"
 embedded-hal = "1"
 fugit = "0.5"
