@@ -72,7 +72,8 @@ impl TxAttenuation {
     }
 }
 
-/// RF bandwidth, 200 kHz to 56 MHz. The baseband filters are calibrated for half of it.
+/// RF bandwidth, 200 kHz to 56 MHz. The baseband filters work on half of it, since the signal
+/// is complex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RfBandwidth(HertzU32);
 

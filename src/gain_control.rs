@@ -32,7 +32,15 @@ const GM_ST_CTRL: [u8; 16] = [
     0x0, 0xD, 0x15, 0x1B, 0x21, 0x25, 0x29, 0x2C, 0x2F, 0x31, 0x33, 0x34, 0x35, 0x3A, 0x3D, 0x3E,
 ];
 
-/// RX gain mode.
+/// How an RX channel picks its gain. Each channel has its own mode.
+///
+/// - `Manual`: the gain stays where it was set (see `Ad9361::manual_gain`).
+/// - `FastAttackAgc`: reacts within a few microseconds. Meant for bursty signals like TDD,
+///   where the gain has to settle at the start of a burst and then hold.
+/// - `SlowAttackAgc`: keeps the average power inside a window and follows it slowly. This is the
+///   default and the one for continuous or slowly changing signals such as FDD LTE.
+/// - `HybridAgc`: slow attack AGC, but gain updates happen when the CTRL_IN2 pin goes high
+///   instead of on the update timer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GainMode {
     Manual = 0,
@@ -41,7 +49,12 @@ pub enum GainMode {
     HybridAgc = 3,
 }
 
-/// Where the gain goes when the fast AGC unlocks.
+/// Gain the fast AGC goes to when it leaves gain lock. The fast AGC settings in
+/// [`GainControl`] pick which of these is used and when.
+///
+/// `MaxGain` is the top of the gain table, `SetGain` is the gain the AGC had last time it
+/// locked, `OptimizedGain` is that gain plus an offset that leaves some headroom, and
+/// `NoGainChange` leaves the gain alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FastAgcTargetGain {
     MaxGain = 0,
@@ -50,14 +63,32 @@ pub enum FastAgcTargetGain {
     NoGainChange = 3,
 }
 
-/// Gain control config. Mirrors `struct gain_control` in no-OS.
+/// Gain control settings for both RX channels. Field names match `struct gain_control` in no-OS,
+/// and `Default` is the no-OS slow attack setup.
+///
+/// The defaults are fine for most uses. Only the fields for the mode in `rx1_mode` and `rx2_mode`
+/// matter: the `mgc_` ones for `Manual`, the `agc_` ones for slow attack, the `f_agc_` ones for
+/// fast attack, and the "Common" ones for all of them. Hybrid mode uses both AGC groups.
+///
+/// The overload and power thresholds apply to both channels. To change gain at run time use
+/// `Ad9361::set_gain_mode` or `Ad9361::manual_gain`, not these.
+///
+/// ```
+/// use ad9361::{GainControl, GainMode};
+///
+/// let gain = GainControl {
+///     rx1_mode: GainMode::FastAttackAgc,
+///     rx2_mode: GainMode::FastAttackAgc,
+///     ..GainControl::default()
+/// };
+/// ```
 #[derive(Clone, Debug)]
 pub struct GainControl {
     pub rx1_mode: GainMode,
     pub rx2_mode: GainMode,
 
     // Common
-    /// samples summed, 1..=8
+    /// ADC samples summed for the overload check, 1..=8
     pub adc_ovr_sample_size: u8,
     pub adc_small_overload_thresh: u8,
     pub adc_large_overload_thresh: u8,
@@ -65,9 +96,10 @@ pub struct GainControl {
     pub lmt_overload_high_thresh: u16,
     /// 16..=800 mV
     pub lmt_overload_low_thresh: u16,
-    /// Samples
+    /// Length of one power measurement, in RX samples. Both AGC modes and the low power check
+    /// use it.
     pub dec_pow_measurement_duration: u32,
-    /// 0..=64 (-dBFS)
+    /// Signal below this is "low power", 0..=64 (-dBFS)
     pub low_power_thresh: u8,
     pub use_rx_fir_out_for_dec_pwr_meas: bool,
     /// leave it off, the ADI gain tables don't use digital gain
@@ -76,19 +108,19 @@ pub struct GainControl {
     pub max_dig_gain: u8,
 
     // MGC
-    /// RX1 on pin control instead of SPI
+    /// RX1 gain steps come from the CTRL_IN pins instead of SPI
     pub mgc_rx1_ctrl_inp_en: bool,
-    /// RX2 on pin control instead of SPI
+    /// RX2 gain steps come from the CTRL_IN pins instead of SPI
     pub mgc_rx2_ctrl_inp_en: bool,
-    /// 1..=8
+    /// Table steps per pin pulse when going up, 1..=8
     pub mgc_inc_gain_step: u8,
-    /// 1..=8
+    /// Table steps per pin pulse when going down, 1..=8
     pub mgc_dec_gain_step: u8,
     /// Split table only: 0: AGC decides, 1: only in LPF, 2: only in LMT
     pub mgc_split_table_ctrl_inp_gain_mode: u8,
 
-    // AGC
-    /// 0..=31 us
+    // AGC (slow attack)
+    /// Added to the computed AGC attack delay, 0..=31 us
     pub agc_attack_delay_extra_margin_us: u8,
     pub agc_outer_thresh_high: u8,
     pub agc_outer_thresh_high_dec_steps: u8,
@@ -113,6 +145,7 @@ pub struct GainControl {
     pub immed_gain_change_if_large_lmt_overload: bool,
 
     // Fast AGC
+    /// Power measurement length while the fast AGC hunts for a level, in RX samples
     pub f_agc_dec_pow_measurement_duration: u32,
     pub f_agc_state_wait_time_ns: u32,
     pub f_agc_allow_agc_gain_increase: bool,
@@ -137,6 +170,7 @@ pub struct GainControl {
     pub f_agc_rst_gla_large_lmt_overload_en: bool,
     pub f_agc_rst_gla_en_agc_pulled_high_en: bool,
     pub f_agc_rst_gla_if_en_agc_pulled_high_mode: FastAgcTargetGain,
+    /// Power measurement length once the fast AGC has locked, in RX samples
     pub f_agc_power_measurement_duration_in_state5: u32,
     pub f_agc_large_overload_inc_steps: u8,
 }

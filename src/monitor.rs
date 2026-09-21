@@ -14,6 +14,9 @@ ForcedEnsmState, Engine, Ad9361Error, CalibrationControl, Config, GainDiffWorder
 };
 
 /// What restarts an RSSI measurement.
+///
+/// The gain change modes suit FDD, where the signal is continuous. The fast AGC lock, `EN_AGC`
+/// pin and RX entry modes suit TDD, where a burst starts the measurement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RssiRestartMode {
     AgcInFastAttackModeLocksTheGain = 0,
@@ -24,7 +27,12 @@ pub enum RssiRestartMode {
     GainChangeOccursOrEnAgcPinPulledHigh = 5,
 }
 
-/// RSSI config.
+/// RSSI measurement timing. The reading is relative to full scale and corrected for the RX
+/// gain, so turning it into dBm needs a calibration with a known signal at the antenna port.
+///
+/// After a restart the chip waits `delay`, then alternates between measuring for `duration` and
+/// waiting for `wait`. `wait` mostly matters in FDD, to line measurements up with slot
+/// boundaries. The defaults measure 1000 us after every gain change.
 #[derive(Clone, Copy, Debug)]
 pub struct RssiConfiguration {
     pub restart_mode: RssiRestartMode,
@@ -48,7 +56,12 @@ impl Default for RssiConfiguration {
     }
 }
 
-/// TX monitor config.
+/// TX monitor (TX power detector) settings. Only usable in TDD, since it borrows the idle RX
+/// path to measure the TX signal through the `TX_MON` pins. The inputs take at most +4 dBm.
+///
+/// The detector has a low and a high gain setting. `low_high_gain_threshold_mdb` is where it
+/// switches between them. `track_en` keeps it running, and `one_shot_mode_en` does a single
+/// measurement each TX burst.
 #[derive(Clone, Copy, Debug)]
 pub struct TxMonitorConfig {
     pub track_en: bool,

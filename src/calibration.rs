@@ -20,7 +20,11 @@ ForcedEnsmState,     Engine, Ad9361Error, BbDcOffsetAtten, BbDcOffsetCount, BbDc
     Tia2CLsb, Tia2CMsb, TxBbfTuneDivider, TxBbfTuneMode, TxTuneControl,
 };
 
-/// RX DC offset cal and tracking.
+/// RX DC offset tracking. The defaults are the no-OS values and rarely need touching.
+///
+/// `update_events` is a bit mask of what triggers an RF DC offset update: RX gain change, no
+/// energy detected, or leaving the RX state. The attenuation and count fields set how fast the
+/// baseband tracking loop settles (high right after a gain change, low afterwards).
 #[derive(Clone, Copy, Debug)]
 pub struct DcOffsetConfig {
     /// tracking update events
@@ -44,7 +48,11 @@ impl Default for DcOffsetConfig {
     }
 }
 
-/// Which RX tracking cals are on.
+/// Which calibrations keep running in RX.
+///
+/// `bbdc` and `rfdc` track baseband and RF DC offset, `rx_quad` tracks the gain and phase error
+/// between I and Q. All start once the chip enters RX or FDD. Turning `rfdc` off means the DC
+/// offset found at init is never updated.
 #[derive(Clone, Copy, Debug)]
 pub struct TrackingConfig {
     pub bbdc: bool,
@@ -65,7 +73,8 @@ impl Default for TrackingConfig {
     }
 }
 
-/// RX NCO phase offset the TX quad cal starts from.
+/// RX NCO phase offset for the TX quadrature cal. The cal transmits a tone and receives it back,
+/// and the phase between the two has to suit the filter setup or it won't converge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RxPhase {
     /// the one that matches the clock config

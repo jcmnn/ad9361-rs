@@ -35,7 +35,7 @@ enum FirGain {
     Tx(TxFirGain),
 }
 
-/// Channels a FIR is loaded for.
+/// Channels a FIR is loaded for. Both channels share the coefficients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FirChannels {
     Ch1 = 1,
@@ -43,7 +43,7 @@ pub enum FirChannels {
     Both = 3,
 }
 
-/// RX FIR decimation or TX FIR interpolation.
+/// RX FIR decimation or TX FIR interpolation. `X1` is no rate change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FirFactor {
     X1 = 1,
@@ -51,7 +51,8 @@ pub enum FirFactor {
     X4 = 4,
 }
 
-/// FIR taps. 16 to 128 of them, a multiple of 16.
+/// FIR taps, 16 to 128 of them in steps of 16. `new` rejects any other length. The taps are
+/// 16-bit signed, and the DC gain is set separately with `RxFirGain` or `TxFirGain`.
 #[derive(Clone, Copy, Debug)]
 pub struct FirCoefficients(&'static [i16]);
 
@@ -99,7 +100,8 @@ pub enum TxFirGain {
     ZeroDb,
 }
 
-/// RX FIR config.
+/// RX FIR settings. Load with `Ad9361::load_rx_fir`. The filter stays bypassed after loading
+/// until it is enabled.
 #[derive(Clone, Copy, Debug)]
 pub struct RxFirConfig {
     pub channels: FirChannels,
@@ -120,7 +122,8 @@ impl Default for RxFirConfig {
     }
 }
 
-/// TX FIR config.
+/// TX FIR settings, loaded with `Ad9361::load_tx_fir`. Use `new` because the tap count is
+/// limited by the interpolation. With no interpolation the chip has room for 64 taps.
 #[derive(Clone, Copy, Debug)]
 pub struct TxFirConfig {
     channels: FirChannels,

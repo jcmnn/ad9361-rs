@@ -192,7 +192,8 @@ where
     }
 
     /// Sets the TX LO. A move of more than 100 MHz reruns the TX quadrature calibration, which takes
-    /// a while.
+    /// a while. The calibration corrects TX DC offset, gain and phase error, and is also worth
+    /// rerunning if the chip temperature changes a lot.
     pub async fn set_tx_lo_frequency(
         &mut self,
         frequency: TxLoFrequency,
@@ -202,6 +203,9 @@ where
 
     /// Sets the RF bandwidths. Slow, since the baseband filters, TIA and ADC are calibrated again,
     /// followed by the TX quadrature calibration.
+    ///
+    /// The filter corners come from dividing the BBPLL, so the bandwidth actually set can be a bit
+    /// off the requested one, more so for narrow filters.
     pub async fn set_bandwidths(
         &mut self,
         rx: RfBandwidth,
@@ -210,7 +214,8 @@ where
         self.engine.update_rf_bandwidth(rx.get(), tx.get()).await
     }
 
-    /// Sets the TX attenuation on both channels. Takes effect immediately, the output steps.
+    /// Sets the TX attenuation on both channels, 0 to 89.75 dB. Takes effect immediately, so the
+    /// output steps.
     pub fn set_tx_attenuation(&mut self, atten: TxAttenuation) -> Result<(), Ad9361Error<S::Error>> {
         Ok(self.engine.set_tx_atten(atten, true, true, true)?)
     }

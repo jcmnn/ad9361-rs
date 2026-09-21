@@ -19,7 +19,10 @@ impl Dac {
     }
 }
 
-/// AuxADC and temperature sensor.
+/// AuxADC and temperature sensor settings.
+///
+/// The defaults leave the temperature sensor measuring once a second. `offset` is the sensor
+/// calibration value (default 0xCE as in no-OS).
 #[derive(Clone, Copy, Debug)]
 pub struct AuxAdcConfig {
     /// signed
@@ -46,7 +49,10 @@ impl Default for AuxAdcConfig {
     }
 }
 
-/// Control outputs.
+/// Control output pins (`CTRL_OUT`). `index` picks which set of internal signals appears on the
+/// eight pins, and `en_mask` says which pins are driven. The signals are listed in the AD9361
+/// reference manual under "Control Output". The default index 0 shows calibration busy/done, and
+/// all pins are on.
 pub struct CtrlOutsConfig {
     pub index: u8,
     /// one bit per output
@@ -62,7 +68,12 @@ impl Default for CtrlOutsConfig {
     }
 }
 
-/// External LNA.
+/// External LNA control through GPO0 and GPO1. Leave it at the default unless an external LNA is
+/// fitted.
+///
+/// `gain` and `bypass_loss` are the LNA's gain and its loss when bypassed, so the RX gain
+/// readings and gain table can account for it. `settling_delay_ns` is the time the LNA needs
+/// after a gain change.
 pub struct ElnaConfig {
     /// high gain
     pub gain: ElnaGain,
@@ -89,13 +100,18 @@ impl Default for ElnaConfig {
     }
 }
 
+/// RX or TX channel 1 or 2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Ch1 = 0,
     Ch2 = 1,
 }
 
-/// Parallel port (the digital data interface).
+/// Parallel data port settings (the LVDS or CMOS interface to the FPGA). The default is the
+/// no-OS LVDS setup with 150 mV bias and on-chip RX termination.
+///
+/// Changing this has to match the FPGA design. `conf3` is fixed up before it is written, since
+/// the chip can't do LVDS with half duplex, single data rate or single port.
 pub struct PortConfig {
     pub conf1: ParallelPortConf1,
     pub conf2: ParallelPortConf2,
@@ -152,6 +168,8 @@ impl Default for PortConfig {
     }
 }
 
+/// General purpose output pins. The chip can drive them from the ENSM state (`slaveX` flags and
+/// delays) or by hand (`gpo_manual_mode_en`). Everything is off by default.
 #[derive(Default)]
 pub struct GpoConfig {
     pub gpo_manual_mode_en: bool,
@@ -181,6 +199,9 @@ pub struct GpoConfig {
     pub gpo3_tx_delay_us: u8,
 }
 
+/// The two auxiliary DACs. Values are in mV. Each DAC can be set by hand, or switched on for
+/// RX, TX or ALERT with a delay after the state change. The default has both at 0 mV in manual
+/// mode.
 pub struct AuxDacConfig {
     /// Default value for DAC 1 (mV)
     pub dac1_default_value: u16,

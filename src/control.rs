@@ -15,7 +15,8 @@ use super::{
 #[must_use = "restore the state with `ensm_restore_state`"]
 pub(crate) struct SavedEnsmState(u8);
 
-/// States the driver can force.
+/// States the driver can put the chip in by SPI. In TDD it can't go from RX straight to TX, so
+/// it goes through `Alert` first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForcedEnsmState {
     Tx,
@@ -35,7 +36,11 @@ impl From<ForcedEnsmState> for EnsmState {
     }
 }
 
-/// States that can be requested. The flush states are transient.
+/// States that can be asked for. The flush states are left out because the chip passes through
+/// them by itself, about six ADC_CLK/64 cycles after leaving RX, TX or FDD.
+///
+/// `Sleep` is the wait state with the clocks and BBPLL off. Calibration results are kept, but
+/// the RF DC offset cal is worth rerunning after waking up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequestedEnsmState {
     Sleep,
@@ -59,10 +64,16 @@ impl From<RequestedEnsmState> for EnsmState {
     }
 }
 
-/// ENSM state.
+/// State of the chip's enable state machine (ENSM), which switches the synthesizers and signal
+/// paths on and off.
+///
+/// `Alert` has both synthesizers running with the signal paths off, so it is the state to sit in
+/// between bursts. `Fdd` has RX and TX on together. In TDD, `Rx` and `Tx` are separate and the
+/// chip has to go through `Alert` to switch. `SleepWait` powers the synthesizers down but keeps
+/// the clocks running.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnsmState {
-    /// Clocks off
+    /// Same as `SleepWait` with the clocks and BBPLL off
     Sleep,
     SleepWait,
     Alert,
@@ -91,7 +102,8 @@ impl EnsmState {
     }
 }
 
-/// What the CLKOUT pin outputs.
+/// Signal on the CLKOUT pin. The `AdcClkDivN` options are the ADC clock divided by N, and
+/// `BufferedXtalnDcxo` is the reference clock passed through. `Disable` turns the pin off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClkoutMode {
     Disable = 0,
