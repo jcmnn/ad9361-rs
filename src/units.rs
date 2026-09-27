@@ -31,7 +31,10 @@ impl TxAttenuation {
 
     /// Whole dB, 0..=89. Out of range in a `const` is a compile error.
     pub const fn from_db(db: u8) -> Self {
-        assert!(db as u16 * 4 <= Self::MAX_QUARTER_DB, "TX attenuation above 89.75 dB");
+        assert!(
+            db as u16 * 4 <= Self::MAX_QUARTER_DB,
+            "TX attenuation above 89.75 dB"
+        );
         Self(db as u16 * 4)
     }
 

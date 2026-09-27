@@ -7,25 +7,33 @@ where
     S: SpiDevice<u8>,
     I: DataInterface,
 {
-    pub(super) async fn setup(&mut self, config: &Ad9361Config) -> Result<(), Ad9361Error<S::Error>> {
+    pub(super) async fn setup(
+        &mut self,
+        config: &Ad9361Config,
+    ) -> Result<(), Ad9361Error<S::Error>> {
         let settings = &config.settings;
         self.auxdac_setup(&settings.auxdac).await?;
         self.gpo_setup(&settings.gpo).await?;
 
-        self.write_reg(Control::default().with_ctrl_enable(true)).await?;
-        self.write_reg(BandgapConfig0::default().with_master_bias_trim(u5::new(0x0E))).await?;
-        self.write_reg(BandgapConfig1::default().with_bandgap_temp_trim(u5::new(0x0E))).await?;
+        self.write_reg(Control::default().with_ctrl_enable(true))
+            .await?;
+        self.write_reg(BandgapConfig0::default().with_master_bias_trim(u5::new(0x0E)))
+            .await?;
+        self.write_reg(BandgapConfig1::default().with_bandgap_temp_trim(u5::new(0x0E)))
+            .await?;
 
         if let ReferenceSource::Crystal(trim) = settings.reference_source {
             self.set_dcxo_trim(trim).await?;
         }
 
-        self.modify_reg::<RefDivideConfig1>(|reg| reg.with_rx_ref_reset_bar(true)).await?;
+        self.modify_reg::<RefDivideConfig1>(|reg| reg.with_rx_ref_reset_bar(true))
+            .await?;
         self.modify_reg::<RefDivideConfig2>(|reg| {
             reg.with_tx_ref_reset_bar(true)
                 .with_tx_ref_doubler_fb_delay(u2::new(3))
                 .with_rx_ref_doubler_fb_delay(u2::new(3))
-        }).await?;
+        })
+        .await?;
 
         self.write_reg(
             ClockEnable::default()
@@ -33,9 +41,11 @@ where
                 .with_clock_enable_dflt(true)
                 .with_bbpll_enable(true)
                 .with_xo_bypass(settings.reference_source == ReferenceSource::External),
-        ).await?;
+        )
+        .await?;
 
-        self.set_clock_rate(Ad9361Clock::BbRef, config.bbpll_ref).await?;
+        self.set_clock_rate(Ad9361Clock::BbRef, config.bbpll_ref)
+            .await?;
 
         self.write_reg(FractBbFreqWord2(0x12)).await?;
         self.write_reg(FractBbFreqWord3(0x34)).await?;
@@ -49,12 +59,15 @@ where
                 self.set_rx_channels(true, true).await?;
             }
             ChannelMode::OneByOne { rx, tx } => {
-                self.set_tx_channels(tx == Channel::Ch1, tx == Channel::Ch2).await?;
-                self.set_rx_channels(rx == Channel::Ch1, rx == Channel::Ch2).await?;
+                self.set_tx_channels(tx == Channel::Ch1, tx == Channel::Ch2)
+                    .await?;
+                self.set_rx_channels(rx == Channel::Ch1, rx == Channel::Ch2)
+                    .await?;
             }
         }
 
-        self.rf_port_setup(settings.rx_input, settings.tx_output).await?;
+        self.rf_port_setup(settings.rx_input, settings.tx_output)
+            .await?;
         self.pp_port_setup(&settings.port).await?;
 
         self.auxadc_setup(&settings.auxadc).await?;
@@ -69,10 +82,13 @@ where
         self.txrx_synth_cp_calib(synth_ref, true).await?;
 
         // load the table up front, set_rfpll_rate then sees it's already there
-        self.write_gain_table(self.gain.current_table, GainTableDest::Both).await?;
-        self.set_rfpll_rate(false, settings.rx_lo_frequency.get()).await?;
+        self.write_gain_table(self.gain.current_table, GainTableDest::Both)
+            .await?;
+        self.set_rfpll_rate(false, settings.rx_lo_frequency.get())
+            .await?;
         // TX quad cal comes later
-        self.set_rfpll_rate(true, settings.tx_lo_frequency.get()).await?;
+        self.set_rfpll_rate(true, settings.tx_lo_frequency.get())
+            .await?;
 
         self.load_mixer_gm_subtable().await?;
         self.gc_setup(&settings.gain_ctrl).await?;
@@ -85,10 +101,12 @@ where
         self.tx_bb_analog_filter_calib(real_tx_bw, bbpll).await?;
         self.rx_tia_calib(real_rx_bw).await?;
         self.tx_bb_second_filter_calib(real_tx_bw).await?;
-        self.rx_adc_setup(bbpll, self.clk.rates.adc, rxbbf_div).await?;
+        self.rx_adc_setup(bbpll, self.clk.rates.adc, rxbbf_div)
+            .await?;
 
         self.bb_dc_offset_calib().await?;
-        self.rf_dc_offset_calib(self.clk.rates.rx_rfpll.to_raw()).await?;
+        self.rf_dc_offset_calib(self.clk.rates.rx_rfpll.to_raw())
+            .await?;
 
         self.tx_quad_calib(real_rx_bw.to_raw(), real_tx_bw.to_raw(), RxPhase::Auto)
             .await?;
@@ -99,15 +117,18 @@ where
         let ensm_pin_ctrl = settings.ensm_pin_ctrl;
         self.set_ensm_mode(self.mode.fdd, ensm_pin_ctrl).await?;
 
-        self.modify_reg::<TxAttenOffset>(|reg| reg.with_mask_clr_atten_update(false)).await?;
+        self.modify_reg::<TxAttenOffset>(|reg| reg.with_mask_clr_atten_update(false))
+            .await?;
         let (tx1, tx2) = match settings.channels {
             ChannelMode::TwoByTwo => (true, true),
             ChannelMode::OneByOne { tx, .. } => (tx == Channel::Ch1, tx == Channel::Ch2),
         };
-        self.set_tx_atten(settings.tx_attenuation, tx1, tx2, true).await?;
+        self.set_tx_atten(settings.tx_attenuation, tx1, tx2, true)
+            .await?;
         if !self.mode.rx2tx2 {
             // mute the unused one
-            self.set_tx_atten(TxAttenuation::MAX, tx2, tx1, true).await?;
+            self.set_tx_atten(TxAttenuation::MAX, tx2, tx1, true)
+                .await?;
         }
 
         self.rssi_setup(&settings.rssi, false).await?;
@@ -116,7 +137,11 @@ where
         self.txmon_setup(&settings.txmon).await?;
 
         self.ensm.current = self.ensm_state().await?;
-        let running = if self.mode.fdd { RequestedEnsmState::Fdd } else { RequestedEnsmState::Rx };
+        let running = if self.mode.fdd {
+            RequestedEnsmState::Fdd
+        } else {
+            RequestedEnsmState::Rx
+        };
         self.ensm_set_state(running, ensm_pin_ctrl).await?;
 
         self.cal.auto_cal_en = true;

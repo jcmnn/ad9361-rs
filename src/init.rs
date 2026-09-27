@@ -20,10 +20,16 @@ where
     }
 
     /// Chip setup, then the data interface: RX side up, port tuned, TX side up.
-    pub(super) async fn init(&mut self, config: &Ad9361Config) -> Result<(), Ad9361Error<S::Error>> {
+    pub(super) async fn init(
+        &mut self,
+        config: &Ad9361Config,
+    ) -> Result<(), Ad9361Error<S::Error>> {
         self.setup(config).await?;
         let layout = self.port_layout();
-        self.interface.init(layout).await.map_err(Ad9361Error::Interface)?;
+        self.interface
+            .init(layout)
+            .await
+            .map_err(Ad9361Error::Interface)?;
         self.post_setup().await?;
         if let Some(tx_fir) = &config.settings.tx_fir {
             self.set_tx_fir_config(tx_fir).await?;

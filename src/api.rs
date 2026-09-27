@@ -93,16 +93,29 @@ where
     ) -> Result<Self, InitFailure<S, R, I>> {
         let early = async |spi: &mut S, resetb: &mut R| {
             spi::reset(resetb).await.map_err(InitError::ResetPin)?;
-            let id = spi::read_reg::<S, ProductId>(spi).await.map_err(Ad9361Error::Spi)?;
+            let id = spi::read_reg::<S, ProductId>(spi)
+                .await
+                .map_err(Ad9361Error::Spi)?;
             if id.product_id().value() != 1 {
-                return Err(InitError::UnsupportedDevice { product_id: id.product_id().value() });
+                return Err(InitError::UnsupportedDevice {
+                    product_id: id.product_id().value(),
+                });
             }
-            let ensm_state = spi::read_reg::<S, State>(spi).await.map_err(Ad9361Error::Spi)?;
+            let ensm_state = spi::read_reg::<S, State>(spi)
+                .await
+                .map_err(Ad9361Error::Spi)?;
             Ok((id.revision().value(), ensm_state.ensm_state().value()))
         };
         let (revision, ensm_state) = match early(&mut spi, &mut resetb).await {
             Ok(result) => result,
-            Err(error) => return Err(InitFailure { error, spi, resetb, interface }),
+            Err(error) => {
+                return Err(InitFailure {
+                    error,
+                    spi,
+                    resetb,
+                    interface,
+                });
+            }
         };
 
         let mut engine = Engine::new(spi, interface, config, ensm_state);
@@ -113,10 +126,19 @@ where
         }
         .await;
         match result {
-            Ok(()) => Ok(Ad9361 { engine, _resetb: resetb, revision }),
+            Ok(()) => Ok(Ad9361 {
+                engine,
+                _resetb: resetb,
+                revision,
+            }),
             Err(error) => {
                 let (spi, interface) = engine.into_parts();
-                Err(InitFailure { error: InitError::Chip(error), spi, resetb, interface })
+                Err(InitFailure {
+                    error: InitError::Chip(error),
+                    spi,
+                    resetb,
+                    interface,
+                })
             }
         }
     }
@@ -213,7 +235,11 @@ where
 
     /// The RX FIR, or `None` if no coefficients are loaded. The default settings load some.
     pub fn rx_fir(&mut self) -> Option<RxFir<'_, S, R, I>> {
-        self.engine.fir.rx.is_some().then_some(RxFir { driver: self })
+        self.engine
+            .fir
+            .rx
+            .is_some()
+            .then_some(RxFir { driver: self })
     }
 
     /// Loads TX FIR coefficients and returns the [`TxFir`]. The filter is bypassed until enabled.
@@ -227,7 +253,11 @@ where
 
     /// The TX FIR, or `None` if no coefficients are loaded. The default settings load some.
     pub fn tx_fir(&mut self) -> Option<TxFir<'_, S, R, I>> {
-        self.engine.fir.tx.is_some().then_some(TxFir { driver: self })
+        self.engine
+            .fir
+            .tx
+            .is_some()
+            .then_some(TxFir { driver: self })
     }
 
     /// Picks where the TX data comes from. [`TxSource::Dds`] is the state after `init`.
@@ -257,7 +287,10 @@ where
     }
 
     /// TX attenuation of `channel`, read from the chip.
-    pub async fn tx_attenuation(&mut self, channel: Channel) -> Result<TxAttenuation, Ad9361Error<S::Error>> {
+    pub async fn tx_attenuation(
+        &mut self,
+        channel: Channel,
+    ) -> Result<TxAttenuation, Ad9361Error<S::Error>> {
         Ok(self.engine.tx_atten(channel == Channel::Ch2).await?)
     }
 
@@ -267,7 +300,10 @@ where
         channels: Channels,
         atten: TxAttenuation,
     ) -> Result<(), Ad9361Error<S::Error>> {
-        let (tx1, tx2) = (channels.contains(Channel::Ch1), channels.contains(Channel::Ch2));
+        let (tx1, tx2) = (
+            channels.contains(Channel::Ch1),
+            channels.contains(Channel::Ch2),
+        );
         Ok(self.engine.set_tx_atten(atten, tx1, tx2, true).await?)
     }
 
@@ -297,7 +333,10 @@ where
             return Err(Ad9361Error::UnsupportedGainTable);
         }
         self.engine.set_gain_mode(channel, GainMode::Manual).await?;
-        Ok(ManualRxGain { driver: self, channel })
+        Ok(ManualRxGain {
+            driver: self,
+            channel,
+        })
     }
 }
 
@@ -321,7 +360,11 @@ where
     /// last entry. The table depends on the RX LO, so the same value can give another gain after
     /// [`Ad9361::set_rx_lo_frequency`] changes the band.
     pub async fn set_gain(&mut self, gain_db: i8) -> Result<i8, Ad9361Error<S::Error>> {
-        Ok(self.driver.engine.set_manual_rx_gain(self.channel, gain_db).await?)
+        Ok(self
+            .driver
+            .engine
+            .set_manual_rx_gain(self.channel, gain_db)
+            .await?)
     }
 }
 

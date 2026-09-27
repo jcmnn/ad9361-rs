@@ -134,12 +134,16 @@ pub(crate) struct FirState {
 impl FirState {
     /// 1 unless there's an enabled FIR
     pub fn rx_decimation(&self) -> u32 {
-        self.rx.filter(|fir| !fir.bypassed).map_or(1, |fir| fir.factor as u32)
+        self.rx
+            .filter(|fir| !fir.bypassed)
+            .map_or(1, |fir| fir.factor as u32)
     }
 
     /// 1 unless there's an enabled FIR
     pub fn tx_interpolation(&self) -> u32 {
-        self.tx.filter(|fir| !fir.bypassed).map_or(1, |fir| fir.factor as u32)
+        self.tx
+            .filter(|fir| !fir.bypassed)
+            .map_or(1, |fir| fir.factor as u32)
     }
 
     pub fn rx_bypassed(&self) -> bool {

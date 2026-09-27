@@ -5,7 +5,9 @@ use embedded_hal_async::spi::Operation;
 use super::*;
 
 /// Pulse reset.
-pub(super) async fn reset<R: embedded_hal::digital::OutputPin>(resetb: &mut R) -> Result<(), R::Error> {
+pub(super) async fn reset<R: embedded_hal::digital::OutputPin>(
+    resetb: &mut R,
+) -> Result<(), R::Error> {
     resetb.set_low()?;
     Timer::after_millis(1).await;
     resetb.set_high()?;
@@ -27,7 +29,8 @@ pub(super) async fn write_bytes<S: SpiDevice<u8>>(
         (addr.value() & 0xFF) as u8,
     ];
 
-    spi.transaction(&mut [Operation::Write(&ctrl_field), Operation::Write(data)]).await
+    spi.transaction(&mut [Operation::Write(&ctrl_field), Operation::Write(data)])
+        .await
 }
 
 /// Reads 1-8 bytes, addresses count down from `addr`.
@@ -44,10 +47,13 @@ pub(super) async fn read_bytes<S: SpiDevice<u8>>(
         (addr.value() & 0xFF) as u8,
     ];
 
-    spi.transaction(&mut [Operation::Write(&ctrl_field), Operation::Read(out)]).await
+    spi.transaction(&mut [Operation::Write(&ctrl_field), Operation::Read(out)])
+        .await
 }
 
-pub(super) async fn read_reg<S: SpiDevice<u8>, Reg: Register>(spi: &mut S) -> Result<Reg, S::Error> {
+pub(super) async fn read_reg<S: SpiDevice<u8>, Reg: Register>(
+    spi: &mut S,
+) -> Result<Reg, S::Error> {
     let mut raw = [0u8; 1];
     read_bytes(spi, &mut raw, Reg::ADDRESS).await?;
     Ok(Reg::from_raw(raw[0]))

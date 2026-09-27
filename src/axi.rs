@@ -54,7 +54,11 @@ impl AxiCores {
             dac_source: ChannelDataSource::default(),
             dac_legacy: ChannelLegacyControl::default(),
         };
-        Self { adc, dac, saved: [lane; MAX_LANES] }
+        Self {
+            adc,
+            dac,
+            saved: [lane; MAX_LANES],
+        }
     }
 }
 
@@ -65,7 +69,11 @@ fn core_clock_hz(freq: u32, ratio: u32) -> u64 {
 }
 
 fn r1_mode(layout: PortLayout) -> R1Mode {
-    if layout.two_channels { R1Mode::TwoChannels } else { R1Mode::OneChannel }
+    if layout.two_channels {
+        R1Mode::TwoChannels
+    } else {
+        R1Mode::OneChannel
+    }
 }
 
 impl DataInterface for AxiCores {
@@ -130,11 +138,19 @@ impl DataInterface for AxiCores {
         info!("axi-ad9361 DAC: Successfully initialized ({clock_hz} Hz)");
 
         self.set_tx_source(layout, TxSource::Dds);
-        let pairs: &[IqPair] =
-            if layout.two_channels { &[IqPair::First, IqPair::Second] } else { &[IqPair::First] };
+        let pairs: &[IqPair] = if layout.two_channels {
+            &[IqPair::First, IqPair::Second]
+        } else {
+            &[IqPair::First]
+        };
         for &pair in pairs {
             // fails below 6 MSPS, and then there's just no tone
-            let _ = self.dac.set_tone(pair, DEFAULT_TONE_FREQUENCY, DEFAULT_TONE_SCALE, sample_rate);
+            let _ = self.dac.set_tone(
+                pair,
+                DEFAULT_TONE_FREQUENCY,
+                DEFAULT_TONE_SCALE,
+                sample_rate,
+            );
         }
         Ok(())
     }
@@ -161,8 +177,13 @@ impl DataInterface for AxiCores {
         if require_rx_lock && !self.adc.read_status().locked() {
             return true;
         }
-        (0..layout.lanes())
-            .any(|lane| self.adc.channel_mut(u4::new(lane)).read_status().raw_value() != 0)
+        (0..layout.lanes()).any(|lane| {
+            self.adc
+                .channel_mut(u4::new(lane))
+                .read_status()
+                .raw_value()
+                != 0
+        })
     }
 
     fn relatch_rx(&mut self) {
@@ -205,7 +226,9 @@ impl DataInterface for AxiCores {
             adc.write_data_path_control(saved.adc);
             adc.modify_pn_select(|reg| reg.with_pn_sel(PnSel::Pn9));
 
-            self.dac.channel_mut(u4::new(lane)).write_data_source(saved.dac_source);
+            self.dac
+                .channel_mut(u4::new(lane))
+                .write_data_source(saved.dac_source);
             self.dac.synchronize();
             self.dac
                 .channel_mut(u4::new(lane))

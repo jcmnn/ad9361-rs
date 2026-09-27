@@ -5600,4 +5600,3 @@ pub struct DacTest2 {
     dac_test_word: u7,
 }
 impl_reg!(DacTest2, 0x3fe);
-

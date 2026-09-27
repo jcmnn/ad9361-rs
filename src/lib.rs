@@ -125,46 +125,44 @@ use embedded_hal_async::spi::SpiDevice;
 use fugit::{HertzU32, HertzU64};
 
 mod api;
+#[cfg(feature = "axi")]
+mod axi;
 mod calibration;
+mod clock_chain;
 mod clocks;
 mod config;
+mod control;
+mod dig_tune;
+mod error;
+mod fir;
+mod gain_control;
+mod gain_tables;
+mod init;
+pub mod interface;
+mod monitor;
 mod ports;
+mod registers;
 mod setup;
 mod spi;
 mod state;
 mod synth;
-mod clock_chain;
-#[cfg(feature = "axi")]
-mod axi;
-mod init;
-pub mod interface;
-mod control;
-mod error;
-mod dig_tune;
-mod fir;
-mod gain_control;
-mod gain_tables;
-mod monitor;
-mod registers;
 mod synth_lut;
 mod units;
 
 pub use api::{Ad9361, ManualRxGain, RxFir, TxFir};
-pub use clocks::Ad9361ClockRates;
-pub use config::{Ad9361Config, Ad9361Settings, ConfigError, DcxoTrim, ReferenceClock};
 #[cfg(feature = "axi")]
 pub use axi::AxiCores;
+pub use clocks::Ad9361ClockRates;
+pub use config::{Ad9361Config, Ad9361Settings, ConfigError, DcxoTrim, ReferenceClock};
 pub use error::{Ad9361Error, InitError, InitFailure};
-pub use interface::DataInterface;
 pub use fir::{
     DEFAULT_FIR_COEFFICIENTS, FirCoefficients, FirFactor, RxFirConfig, RxFirGain, TxFirConfig,
     TxFirGain,
 };
 pub use gain_control::GainMode;
+pub use interface::DataInterface;
 pub use ports::{Channel, Channels};
-pub use units::{
-    OutOfRange, RfBandwidth, RxLoFrequency, SampleRate, TxAttenuation, TxLoFrequency,
-};
+pub use units::{OutOfRange, RfBandwidth, RxLoFrequency, SampleRate, TxAttenuation, TxLoFrequency};
 
 /// The types that only appear inside [`Ad9361Settings`]: channel and duplex modes, the reference
 /// source, clock chain, ports, gain control, calibration tracking, monitors and the small blocks.
@@ -217,7 +215,6 @@ const MIN_VCO_FREQ_HZ: u64 = 6_000_000_000;
 const MAX_CARRIER_FREQ_HZ: u64 = 6_000_000_000;
 const MIN_RX_CARRIER_FREQ_HZ: u64 = 70_000_000;
 const MIN_TX_CARRIER_FREQ_HZ: u64 = 46_875_001;
-
 
 /// Register-level driver core plus the state it needs. Not public, go through [`Ad9361`] so
 /// setup is guaranteed to have run.

@@ -30,7 +30,10 @@ struct MockSpi {
 
 impl MockSpi {
     fn new() -> Self {
-        Self { regs: [0; 1024], writes: Vec::new() }
+        Self {
+            regs: [0; 1024],
+            writes: Vec::new(),
+        }
     }
 }
 
@@ -39,7 +42,10 @@ impl ErrorType for MockSpi {
 }
 
 impl SpiDevice<u8> for MockSpi {
-    async fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Infallible> {
+    async fn transaction(
+        &mut self,
+        operations: &mut [Operation<'_, u8>],
+    ) -> Result<(), Infallible> {
         let [Operation::Write(header), data] = operations else {
             panic!("expected a header and a data operation");
         };
@@ -72,7 +78,11 @@ impl SpiDevice<u8> for MockSpi {
 const REF_CLK: HertzU32 = HertzU32::Hz(40_000_000);
 
 fn default_config() -> Ad9361Config {
-    Ad9361Config::new(Ad9361Settings::default(), ReferenceClock::new(REF_CLK).unwrap()).unwrap()
+    Ad9361Config::new(
+        Ad9361Settings::default(),
+        ReferenceClock::new(REF_CLK).unwrap(),
+    )
+    .unwrap()
 }
 
 /// FPGA side that does nothing and never sees a PN error.
@@ -132,13 +142,22 @@ fn tx_attenuation_range_and_steps() {
     // rounds down
     assert_eq!(TxAttenuation::from_mdb(10_249).unwrap().quarter_db(), 40);
     assert!(TxAttenuation::from_quarter_db(360).is_err());
-    assert_eq!(TxAttenuation::saturating_from_quarter_db(1023), TxAttenuation::MAX);
+    assert_eq!(
+        TxAttenuation::saturating_from_quarter_db(1023),
+        TxAttenuation::MAX
+    );
 }
 
 #[test]
 fn set_tx_atten_writes_both_bytes_msb_first() {
     let mut engine = engine();
-    block_ready(engine.set_tx_atten(TxAttenuation::from_quarter_db(300).unwrap(), true, false, true)).unwrap();
+    block_ready(engine.set_tx_atten(
+        TxAttenuation::from_quarter_db(300).unwrap(),
+        true,
+        false,
+        true,
+    ))
+    .unwrap();
     // 300 = 0x12C, 0x74 has bit 8 and 0x73 the low byte
     assert_eq!(engine.spi.regs[0x74], 0x01);
     assert_eq!(engine.spi.regs[0x73], 0x2C);
@@ -164,11 +183,16 @@ fn default_settings_are_valid_for_the_pluto_reference() {
 fn ensm_pin_control_excludes_fdd_independent_mode() {
     let settings = Ad9361Settings {
         ensm_pin_ctrl: true,
-        duplex: Duplex::Fdd { independent_mode: true },
+        duplex: Duplex::Fdd {
+            independent_mode: true,
+        },
         ..Ad9361Settings::default()
     };
     let result = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap());
-    assert!(matches!(result, Err(ConfigError::EnsmPinControlInFddIndependentMode)));
+    assert!(matches!(
+        result,
+        Err(ConfigError::EnsmPinControlInFddIndependentMode)
+    ));
 }
 
 #[test]
@@ -186,7 +210,10 @@ fn synth_reference_must_be_reachable() {
 fn clock_chain_beyond_the_limits_is_rejected() {
     let mut rx = PathClocks::DEFAULT_RX;
     rx.converter = HertzU32::Hz(700_000_000);
-    let settings = Ad9361Settings { rx_path_clks: rx, ..Ad9361Settings::default() };
+    let settings = Ad9361Settings {
+        rx_path_clks: rx,
+        ..Ad9361Settings::default()
+    };
     let result = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap());
     assert!(matches!(result, Err(ConfigError::ClockChain)));
 }
@@ -201,7 +228,10 @@ fn clock_chain_for_30_72_msps_is_the_default_chain() {
     // the calculated chain runs the DAC at the ADC rate, the default one at half
     assert_eq!(
         tx,
-        PathClocks { converter: HertzU32::Hz(245_760_000), ..PathClocks::DEFAULT_TX }
+        PathClocks {
+            converter: HertzU32::Hz(245_760_000),
+            ..PathClocks::DEFAULT_TX
+        }
     );
 }
 
@@ -209,7 +239,11 @@ fn clock_chain_for_30_72_msps_is_the_default_chain() {
 fn clock_chain_rejects_impossible_rates() {
     let engine = engine();
     assert!(engine.calculate_rf_clock_chain(HertzU32::Hz(0), 1).is_err());
-    assert!(engine.calculate_rf_clock_chain(HertzU32::Hz(70_000_000), 1).is_err());
+    assert!(
+        engine
+            .calculate_rf_clock_chain(HertzU32::Hz(70_000_000), 1)
+            .is_err()
+    );
 }
 
 #[test]
@@ -219,7 +253,10 @@ fn bbpll_words_reproduce_the_rate() {
     let rate = 40_000_000u64 * integer as u64
         + (40_000_000u64 * fract as u64 + BBPLL_MODULUS as u64 / 2) / BBPLL_MODULUS as u64;
     // fractional word resolution is parent / modulus, about 19 Hz
-    assert!(rate.abs_diff(983_040_000) <= 40_000_000 / BBPLL_MODULUS as u64 + 1, "{rate}");
+    assert!(
+        rate.abs_diff(983_040_000) <= 40_000_000 / BBPLL_MODULUS as u64 + 1,
+        "{rate}"
+    );
 }
 
 #[test]
@@ -238,7 +275,10 @@ fn manual_gain_selects_the_closest_table_entry() {
     let abs = gain_tables::GAIN_TABLES[table].abs_gain;
 
     let actual = block_ready(engine.set_manual_rx_gain(Channel::Ch1, 30)).unwrap();
-    assert!((actual - 30).abs() <= 1, "closest entry to 30 dB is {actual} dB");
+    assert!(
+        (actual - 30).abs() <= 1,
+        "closest entry to 30 dB is {actual} dB"
+    );
     let index = abs.iter().position(|g| *g == actual).unwrap();
     assert_eq!(engine.spi.regs[0x109] & 0x7F, index as u8);
 
@@ -268,10 +308,19 @@ fn ensm_state_is_saved_and_restored() {
 fn dcxo_tune_splits_the_fine_value() {
     let mut engine = engine();
     block_ready(engine.set_dcxo_trim(DcxoTrim::DEFAULT)).unwrap();
-    assert_eq!(engine.spi.regs[DcxoCoarseTune::ADDRESS.value() as usize] & 0x3F, 8);
+    assert_eq!(
+        engine.spi.regs[DcxoCoarseTune::ADDRESS.value() as usize] & 0x3F,
+        8
+    );
     // 5920 = 0x1720, low 5 bits then the upper 8
-    assert_eq!(engine.spi.regs[DcxoFineTuneLow::ADDRESS.value() as usize] & 0x1F, 0x00);
-    assert_eq!(engine.spi.regs[DcxoFineTuneHigh::ADDRESS.value() as usize], 0xB9);
+    assert_eq!(
+        engine.spi.regs[DcxoFineTuneLow::ADDRESS.value() as usize] & 0x1F,
+        0x00
+    );
+    assert_eq!(
+        engine.spi.regs[DcxoFineTuneHigh::ADDRESS.value() as usize],
+        0xB9
+    );
 }
 
 #[test]
@@ -283,7 +332,11 @@ fn fir_state_uses_unit_rates_until_a_filter_is_loaded_and_enabled() {
     assert_eq!((fir.rx_decimation(), fir.tx_interpolation()), (1, 1));
 
     // loaded, still bypassed
-    fir.rx = Some(LoadedFir { factor: FirFactor::X4, ntaps: 64, bypassed: true });
+    fir.rx = Some(LoadedFir {
+        factor: FirFactor::X4,
+        ntaps: 64,
+        bypassed: true,
+    });
     assert!(fir.rx_bypassed());
     assert_eq!(fir.rx_decimation(), 1);
 
@@ -300,7 +353,10 @@ fn engine_state_starts_from_the_configuration() {
     assert!(engine.mode.rx2tx2 && engine.mode.fdd);
     assert_eq!(engine.mode.rx1tx1_use_rx, Channel::Ch1);
     // table for the RX LO (2.4 GHz) is the loaded one
-    assert_eq!(engine.gain.current_table, gain_control::gain_table_index(false, 2_400_000_000));
+    assert_eq!(
+        engine.gain.current_table,
+        gain_control::gain_table_index(false, 2_400_000_000)
+    );
     assert!(engine.clk.current_rx_lo_freq.is_none() && engine.clk.current_tx_lo_freq.is_none());
     assert!(engine.cal.last_tx_quad_cal_phase.is_none());
     assert!(engine.fir.rx.is_none() && engine.fir.tx.is_none());
@@ -340,19 +396,28 @@ fn settings_that_would_be_truncated_are_rejected() {
     let mut settings = Ad9361Settings::default();
     settings.gain_ctrl.mgc_inc_gain_step = 9;
     let result = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap());
-    assert!(matches!(result, Err(ConfigError::OutOfRange("gain_ctrl.mgc_inc_gain_step"))));
+    assert!(matches!(
+        result,
+        Err(ConfigError::OutOfRange("gain_ctrl.mgc_inc_gain_step"))
+    ));
 
     let mut settings = Ad9361Settings::default();
     settings.rssi.duration = 0;
     let result = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap());
-    assert!(matches!(result, Err(ConfigError::OutOfRange("rssi.duration"))));
+    assert!(matches!(
+        result,
+        Err(ConfigError::OutOfRange("rssi.duration"))
+    ));
 }
 
 #[test]
 fn dac_channel_count_follows_the_channel_mode() {
     assert_eq!(engine().dac_num_tx_channels(), 2);
     let settings = Ad9361Settings {
-        channels: ChannelMode::OneByOne { rx: Channel::Ch1, tx: Channel::Ch2 },
+        channels: ChannelMode::OneByOne {
+            rx: Channel::Ch1,
+            tx: Channel::Ch2,
+        },
         ..Ad9361Settings::default()
     };
     let config = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap()).unwrap();

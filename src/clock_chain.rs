@@ -172,8 +172,16 @@ pub(super) fn validate_trx_clock_chain<E>(
         hb1: MAX_TX_HB1,
         sample: MAX_BASEBAND_RATE,
     };
-    if rx.as_array().iter().zip(max_rx.as_array()).any(|(r, m)| *r > m)
-        || tx.as_array().iter().zip(max_tx.as_array()).any(|(r, m)| *r > m)
+    if rx
+        .as_array()
+        .iter()
+        .zip(max_rx.as_array())
+        .any(|(r, m)| *r > m)
+        || tx
+            .as_array()
+            .iter()
+            .zip(max_tx.as_array())
+            .any(|(r, m)| *r > m)
     {
         return Err(Ad9361Error::InvalidRate);
     }
@@ -231,7 +239,14 @@ impl PathClocks {
     };
 
     const fn as_array(&self) -> [HertzU32; 6] {
-        [self.bbpll, self.converter, self.hb3, self.hb2, self.hb1, self.sample]
+        [
+            self.bbpll,
+            self.converter,
+            self.hb3,
+            self.hb2,
+            self.hb1,
+            self.sample,
+        ]
     }
 }
 
@@ -251,11 +266,21 @@ where
         self.set_bbpll_rate(rx.bbpll).await?;
 
         let stages = [
-            (Ad9361Clock::Adc, Ad9361Clock::Dac, rx.converter, tx.converter),
+            (
+                Ad9361Clock::Adc,
+                Ad9361Clock::Dac,
+                rx.converter,
+                tx.converter,
+            ),
             (Ad9361Clock::R2, Ad9361Clock::T2, rx.hb3, tx.hb3),
             (Ad9361Clock::R1, Ad9361Clock::T1, rx.hb2, tx.hb2),
             (Ad9361Clock::ClkRf, Ad9361Clock::ClkTf, rx.hb1, tx.hb1),
-            (Ad9361Clock::RxSampl, Ad9361Clock::TxSampl, rx.sample, tx.sample),
+            (
+                Ad9361Clock::RxSampl,
+                Ad9361Clock::TxSampl,
+                rx.sample,
+                tx.sample,
+            ),
         ];
         for (rx_clk, tx_clk, rx_rate, tx_rate) in stages {
             self.set_clock_rate(rx_clk, rx_rate).await?;
@@ -268,13 +293,15 @@ where
             let enable = !self.fir.rx_bypassed();
             self.modify_reg::<RxEnableFilterControl>(|reg| {
                 reg.with_rx_fir_enable_decimation(u2::new(enable as u8))
-            }).await?;
+            })
+            .await?;
         }
         if self.fir.tx_interpolation() == 1 {
             let enable = !self.fir.tx_bypassed();
             self.modify_reg::<TxEnableFilterControl>(|reg| {
                 reg.with_tx_fir_enable_interpolation(u2::new(enable as u8))
-            }).await?;
+            })
+            .await?;
         }
         Ok(())
     }
@@ -290,7 +317,9 @@ where
         // An enabled FIR shifts the interface timing. Usually harmless, but at 61.44 MSPS it
         // breaks some setups, so tune whenever a FIR is on. With FIRs off, put the original
         // delays back. Result is ignored, same as no-OS.
-        if !self.tune.dig_interface_tune_fir_disable && !(self.fir.tx_bypassed() && self.fir.rx_bypassed()) {
+        if !self.tune.dig_interface_tune_fir_disable
+            && !(self.fir.tx_bypassed() && self.fir.rx_bypassed())
+        {
             let flags = DigTuneFlags {
                 skip_store_result: true,
                 ..Default::default()

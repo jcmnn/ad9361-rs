@@ -4,17 +4,17 @@
 //! The IDELAY/ODELAY tuning (`DO_IDELAY`/`DO_ODELAY`) isn't here, no-OS never turns it on in its
 //! own setup.
 
-use embedded_hal_async::spi::SpiDevice;
 use arbitrary_int::u2;
 use embassy_time::Timer;
+use embedded_hal_async::spi::SpiDevice;
 
 use fugit::HertzU32;
 
-use super::{
-ForcedEnsmState, DigInterfaceTune, Engine, Ad9361Error, TxAttenuation, BistConfig, Channel, ObserveConfig, ParallelPortConf3, Register,
-    RxClockDataDelay, TxClockDataDelay, find_opt,
-};
 use super::interface::DataInterface;
+use super::{
+    Ad9361Error, BistConfig, Channel, DigInterfaceTune, Engine, ForcedEnsmState, ObserveConfig,
+    ParallelPortConf3, Register, RxClockDataDelay, TxAttenuation, TxClockDataDelay, find_opt,
+};
 
 /// Where the data loops back during tuning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,8 +74,13 @@ where
     /// this moves TX to the RX channel while looping back, and back again after.
     async fn int_loopback_fix_ch_cross(&mut self, enable: bool) -> Result<(), S::Error> {
         if !self.mode.rx2tx2 && self.mode.rx1tx1_use_rx != self.mode.rx1tx1_use_tx {
-            let ch = if enable { self.mode.rx1tx1_use_rx } else { self.mode.rx1tx1_use_tx };
-            self.set_tx_channels(ch == Channel::Ch1, ch == Channel::Ch2).await?;
+            let ch = if enable {
+                self.mode.rx1tx1_use_rx
+            } else {
+                self.mode.rx1tx1_use_tx
+            };
+            self.set_tx_channels(ch == Channel::Ch1, ch == Channel::Ch2)
+                .await?;
         }
         Ok(())
     }
@@ -91,7 +96,8 @@ where
                     observe
                         .with_data_port_sp_hd_loop_test_oe(false)
                         .with_data_port_loop_test_enable(false),
-                ).await?;
+                )
+                .await?;
             }
             BistLoopback::TxToRx => {
                 self.int_loopback_fix_ch_cross(true).await?;
@@ -102,7 +108,8 @@ where
                             conf3.single_port_mode() && conf3.half_duplex_mode(),
                         )
                         .with_data_port_loop_test_enable(true),
-                ).await?;
+                )
+                .await?;
             }
         }
         Ok(())
@@ -111,9 +118,15 @@ where
     /// `ad9361_get_tx_atten()`, TX2 or else TX1.
     pub(crate) async fn tx_atten(&mut self, tx2: bool) -> Result<TxAttenuation, S::Error> {
         let mut buf = [0u8; 2];
-        let addr = if tx2 { super::Tx2Atten1::ADDRESS } else { super::Tx1Atten1::ADDRESS };
+        let addr = if tx2 {
+            super::Tx2Atten1::ADDRESS
+        } else {
+            super::Tx1Atten1::ADDRESS
+        };
         self.read_bytes(&mut buf, addr).await?;
-        Ok(TxAttenuation::saturating_from_quarter_db(u16::from_be_bytes(buf)))
+        Ok(TxAttenuation::saturating_from_quarter_db(
+            u16::from_be_bytes(buf),
+        ))
     }
 
     /// Mute by maxing the attenuation, or restore it (`ad9361_tx_mute()`).
@@ -121,7 +134,9 @@ where
         if mute {
             self.tx1_atten_cached = self.tx_atten(false).await?;
             self.tx2_atten_cached = self.tx_atten(true).await?;
-            return self.set_tx_atten(TxAttenuation::MAX, true, true, true).await;
+            return self
+                .set_tx_atten(TxAttenuation::MAX, true, true, true)
+                .await;
         }
         let (tx1, tx2) = (self.tx1_atten_cached, self.tx2_atten_cached);
         if tx1 == tx2 {
@@ -174,12 +189,18 @@ where
         let half_data_rate = !(self.mode.lvds_mode || !self.mode.rx2tx2);
 
         let mut field = [Field::default(); 2];
-        let sweeps = if max_freq.to_raw() != 0 { RATES.len() } else { 1 };
+        let sweeps = if max_freq.to_raw() != 0 {
+            RATES.len()
+        } else {
+            1
+        };
         for rate in RATES.iter().take(sweeps) {
             if max_freq.to_raw() != 0 {
                 let rate = if half_data_rate { rate / 2 } else { *rate };
                 // no chain for that rate? carry on with the current clocks, no-OS does
-                let _ = self.set_trx_clock_chain_freq_no_tune(HertzU32::Hz(rate)).await;
+                let _ = self
+                    .set_trx_clock_chain_freq_no_tune(HertzU32::Hz(rate))
+                    .await;
             }
 
             for (i, results) in field.iter_mut().enumerate() {
@@ -238,7 +259,8 @@ where
     ) -> Result<(), Ad9361Error<S::Error>> {
         let ensm_state = self.save_ensm_state().await?;
 
-        let mut restore = self.tune.dig_interface_tune == DigInterfaceTune::UseConfigured || flags.restore_default;
+        let mut restore = self.tune.dig_interface_tune == DigInterfaceTune::UseConfigured
+            || flags.restore_default;
         let mut result = Ok(());
         if !restore {
             let loopback = self.tune.bist_loopback_mode;
@@ -276,7 +298,8 @@ where
         }
 
         if !self.mode.fdd {
-            self.set_ensm_mode(self.mode.fdd, self.ensm.pin_ctrl).await?;
+            self.set_ensm_mode(self.mode.fdd, self.ensm.pin_ctrl)
+                .await?;
         }
         self.ensm_restore_state(ensm_state).await?;
 

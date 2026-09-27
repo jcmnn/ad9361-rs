@@ -10,10 +10,10 @@ use arbitrary_int::{u2, u3, u10};
 use fugit::HertzU32;
 
 use super::{
+    Ad9361Error, Channels, DigTuneFlags, Engine, ForcedEnsmState, OutOfRange, Register,
+    RxEnableFilterControl, RxFilterGain, TxEnableFilterControl, TxFilterCoefAddr,
+    TxFilterCoefReadData2, TxFilterCoefWriteData1, TxFilterCoefWriteData2, TxFilterConf,
     state::LoadedFir,
-    Channels, OutOfRange, ForcedEnsmState, Engine, Ad9361Error, DigTuneFlags, Register, RxEnableFilterControl, RxFilterGain,
-    TxEnableFilterControl, TxFilterCoefAddr, TxFilterCoefReadData2, TxFilterCoefWriteData1,
-    TxFilterCoefWriteData2, TxFilterConf,
 };
 
 /// RX FIR registers sit this far above the TX ones.
@@ -21,14 +21,10 @@ const RX_FIR_REG_OFFSET: u16 = 0x90;
 
 /// Band pass, 3/20 fs to 1/4 fs, 64 taps. Loaded by the default settings.
 pub const DEFAULT_FIR_COEFFICIENTS: [i16; 64] = [
-    -4, -6, -37, 35, 186, 86, -284, -315,
-    107, 219, -4, 271, 558, -307, -1182, -356,
-    658, 157, 207, 1648, 790, -2525, -2553, 748,
-    865, -476, 3737, 6560, -3583, -14731, -5278, 14819,
-    14819, -5278, -14731, -3583, 6560, 3737, -476, 865,
-    748, -2553, -2525, 790, 1648, 207, 157, 658,
-    -356, -1182, -307, 558, 271, -4, 219, 107,
-    -315, -284, 86, 186, 35, -37, -6, -4,
+    -4, -6, -37, 35, 186, 86, -284, -315, 107, 219, -4, 271, 558, -307, -1182, -356, 658, 157, 207,
+    1648, 790, -2525, -2553, 748, 865, -476, 3737, 6560, -3583, -14731, -5278, 14819, 14819, -5278,
+    -14731, -3583, 6560, 3737, -476, 865, 748, -2553, -2525, 790, 1648, 207, 157, 658, -356, -1182,
+    -307, 558, 271, -4, 219, 107, -315, -284, 86, 186, 35, -37, -6, -4,
 ];
 
 /// FIR gain, RX or TX.
@@ -139,7 +135,12 @@ impl TxFirConfig {
         if matches!(interpolation, FirFactor::X1) && coefficients.taps().len() > 64 {
             return Err(OutOfRange);
         }
-        Ok(Self { channels, gain, interpolation, coefficients })
+        Ok(Self {
+            channels,
+            gain,
+            interpolation,
+            coefficients,
+        })
     }
 }
 
@@ -165,7 +166,8 @@ where
     }
 
     async fn write_fir_reg<Reg: Register>(&mut self, rx: bool, reg: Reg) -> Result<(), S::Error> {
-        self.write_bytes(&[reg.to_raw()], Self::fir_addr::<Reg>(rx)).await
+        self.write_bytes(&[reg.to_raw()], Self::fir_addr::<Reg>(rx))
+            .await
     }
 
     /// `ad9361_load_fir_filter_coef()`. The filter clock runs at `factor` while the
@@ -179,7 +181,9 @@ where
         coefficients: FirCoefficients,
     ) -> Result<(), S::Error> {
         let saved_ensm = self.ensm_force_state(ForcedEnsmState::Alert).await?;
-        let result = self.write_fir_coefficients(rx, channels, gain, factor, coefficients.taps()).await;
+        let result = self
+            .write_fir_coefficients(rx, channels, gain, factor, coefficients.taps())
+            .await;
         self.ensm_restore_state(saved_ensm).await?;
         result
     }
@@ -195,27 +199,38 @@ where
         let ntaps = coef.len();
         let mut conf = TxFilterConf::default();
         // field is the factor, with 4 encoded as 3. Clock has to run while loading
-        let clock_field = u2::new(if factor == FirFactor::X4 { 3 } else { factor as u8 & 0x3 });
+        let clock_field = u2::new(if factor == FirFactor::X4 {
+            3
+        } else {
+            factor as u8 & 0x3
+        });
         let fir_enable;
         if rx {
-            let FirGain::Rx(gain) = gain else { unreachable!("RX FIRs have RX gains") };
-            self.write_reg(RxFilterGain::default().with_filter_gain(u2::new(gain.field()))).await?;
+            let FirGain::Rx(gain) = gain else {
+                unreachable!("RX FIRs have RX gains")
+            };
+            self.write_reg(RxFilterGain::default().with_filter_gain(u2::new(gain.field())))
+                .await?;
             fir_enable = self
-                .read_reg::<RxEnableFilterControl>().await?
+                .read_reg::<RxEnableFilterControl>()
+                .await?
                 .rx_fir_enable_decimation();
             let field = clock_field;
             self.modify_reg::<RxEnableFilterControl>(|reg| {
                 reg.with_rx_fir_enable_decimation(field)
-            }).await?;
+            })
+            .await?;
         } else {
             conf = conf.with_tx_fir_gain_6db(gain == FirGain::Tx(TxFirGain::Minus6Db));
             fir_enable = self
-                .read_reg::<TxEnableFilterControl>().await?
+                .read_reg::<TxEnableFilterControl>()
+                .await?
                 .tx_fir_enable_interpolation();
             let field = clock_field;
             self.modify_reg::<TxEnableFilterControl>(|reg| {
                 reg.with_tx_fir_enable_interpolation(field)
-            }).await?;
+            })
+            .await?;
         }
 
         conf = conf
@@ -226,8 +241,10 @@ where
 
         for (i, tap) in coef.iter().enumerate() {
             self.write_fir_reg(rx, TxFilterCoefAddr(i as u8)).await?;
-            self.write_fir_reg(rx, TxFilterCoefWriteData1(*tap as u8)).await?;
-            self.write_fir_reg(rx, TxFilterCoefWriteData2((*tap >> 8) as u8)).await?;
+            self.write_fir_reg(rx, TxFilterCoefWriteData1(*tap as u8))
+                .await?;
+            self.write_fir_reg(rx, TxFilterCoefWriteData2((*tap >> 8) as u8))
+                .await?;
             self.write_fir_reg(rx, conf.with_fir_write(true)).await?;
             // dummy writes, the write needs time
             self.write_fir_reg(rx, TxFilterCoefReadData2(0)).await?;
@@ -235,24 +252,24 @@ where
         }
 
         self.write_fir_reg(rx, conf).await?;
-        self.write_fir_reg(rx, conf.with_fir_start_clk(false)).await?;
+        self.write_fir_reg(rx, conf.with_fir_start_clk(false))
+            .await?;
 
         if rx {
             self.modify_reg::<RxEnableFilterControl>(|reg| {
                 reg.with_rx_fir_enable_decimation(fir_enable)
-            }).await
+            })
+            .await
         } else {
             self.modify_reg::<TxEnableFilterControl>(|reg| {
                 reg.with_tx_fir_enable_interpolation(fir_enable)
-            }).await
+            })
+            .await
         }
     }
 
     /// `ad9361_set_rx_fir_config()`.
-    pub(crate) async fn set_rx_fir_config(
-        &mut self,
-        config: &RxFirConfig,
-    ) -> Result<(), S::Error> {
+    pub(crate) async fn set_rx_fir_config(&mut self, config: &RxFirConfig) -> Result<(), S::Error> {
         // still bypassed after loading, until someone enables it
         let bypassed = self.fir.rx_bypassed();
         self.fir.rx = Some(LoadedFir {
@@ -271,10 +288,7 @@ where
     }
 
     /// `ad9361_set_tx_fir_config()`.
-    pub(crate) async fn set_tx_fir_config(
-        &mut self,
-        config: &TxFirConfig,
-    ) -> Result<(), S::Error> {
+    pub(crate) async fn set_tx_fir_config(&mut self, config: &TxFirConfig) -> Result<(), S::Error> {
         let bypassed = self.fir.tx_bypassed();
         self.fir.tx = Some(LoadedFir {
             factor: config.interpolation,
@@ -293,7 +307,10 @@ where
 
     /// `ad9361_set_rx_fir_en_dis()`. Redoes clocks and bandwidths, and the filter stays off if
     /// that fails.
-    pub(crate) async fn set_rx_fir_en_dis(&mut self, enable: bool) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn set_rx_fir_en_dis(
+        &mut self,
+        enable: bool,
+    ) -> Result<(), Ad9361Error<S::Error>> {
         let fir = self.fir.rx.as_mut().ok_or(Ad9361Error::FirNotLoaded)?;
         if fir.bypassed == !enable {
             return Ok(());
@@ -308,7 +325,10 @@ where
 
     /// `ad9361_set_tx_fir_en_dis()`. Redoes clocks and bandwidths, and the filter stays off if
     /// that fails.
-    pub(crate) async fn set_tx_fir_en_dis(&mut self, enable: bool) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn set_tx_fir_en_dis(
+        &mut self,
+        enable: bool,
+    ) -> Result<(), Ad9361Error<S::Error>> {
         let fir = self.fir.tx.as_mut().ok_or(Ad9361Error::FirNotLoaded)?;
         if fir.bypassed == !enable {
             return Ok(());
@@ -329,7 +349,11 @@ where
         let (rx, tx) = match self.calculate_rf_clock_chain(tx_sample_rate, self.clk.rate_governor) {
             Ok(chains) => chains,
             Err(_) => {
-                let min = if self.clk.rate_governor != 0 { 1_500_000 } else { 1_000_000 };
+                let min = if self.clk.rate_governor != 0 {
+                    1_500_000
+                } else {
+                    1_000_000
+                };
                 self.calculate_rf_clock_chain(HertzU32::Hz(min), self.clk.rate_governor)?
             }
         };
@@ -351,7 +375,10 @@ where
         self.set_trx_clock_chain(&rx, &tx).await?;
 
         // same as in set_trx_clock_chain()
-        if !self.tune.dig_interface_tune_fir_disable && self.fir.tx_bypassed() && self.fir.rx_bypassed() {
+        if !self.tune.dig_interface_tune_fir_disable
+            && self.fir.tx_bypassed()
+            && self.fir.rx_bypassed()
+        {
             let flags = DigTuneFlags {
                 restore_default: true,
                 ..Default::default()

@@ -61,7 +61,10 @@ pub struct DcxoTrim {
 impl DcxoTrim {
     /// The trim the default settings use. Measure the crystal on the board and adjust from
     /// there.
-    pub const DEFAULT: Self = Self { coarse: u6::new(8), fine: u13::new(5920) };
+    pub const DEFAULT: Self = Self {
+        coarse: u6::new(8),
+        fine: u13::new(5920),
+    };
 }
 
 impl Default for DcxoTrim {
@@ -127,15 +130,32 @@ impl Duplex {
     }
 
     pub(super) fn fdd_independent_mode(self) -> bool {
-        matches!(self, Duplex::Fdd { independent_mode: true })
+        matches!(
+            self,
+            Duplex::Fdd {
+                independent_mode: true
+            }
+        )
     }
 
     pub(super) fn tdd_skip_vco_cal(self) -> bool {
-        matches!(self, Duplex::Tdd { skip_vco_cal: true, .. })
+        matches!(
+            self,
+            Duplex::Tdd {
+                skip_vco_cal: true,
+                ..
+            }
+        )
     }
 
     pub(super) fn tdd_dual_synth(self) -> bool {
-        matches!(self, Duplex::Tdd { dual_synth: true, .. })
+        matches!(
+            self,
+            Duplex::Tdd {
+                dual_synth: true,
+                ..
+            }
+        )
     }
 }
 
@@ -215,10 +235,26 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
     }
 
     let g = &settings.gain_ctrl;
-    check!("gain_ctrl.adc_ovr_sample_size", g.adc_ovr_sample_size, 1..=8);
-    check!("gain_ctrl.lmt_overload_high_thresh", g.lmt_overload_high_thresh, 16..=800);
-    check!("gain_ctrl.lmt_overload_low_thresh", g.lmt_overload_low_thresh, 16..=800);
-    check!("gain_ctrl.dec_pow_measurement_duration", g.dec_pow_measurement_duration, 16..=u32::MAX);
+    check!(
+        "gain_ctrl.adc_ovr_sample_size",
+        g.adc_ovr_sample_size,
+        1..=8
+    );
+    check!(
+        "gain_ctrl.lmt_overload_high_thresh",
+        g.lmt_overload_high_thresh,
+        16..=800
+    );
+    check!(
+        "gain_ctrl.lmt_overload_low_thresh",
+        g.lmt_overload_low_thresh,
+        16..=800
+    );
+    check!(
+        "gain_ctrl.dec_pow_measurement_duration",
+        g.dec_pow_measurement_duration,
+        16..=u32::MAX
+    );
     check!("gain_ctrl.low_power_thresh", g.low_power_thresh, 0..=64);
     check!("gain_ctrl.max_dig_gain", g.max_dig_gain, 0..=31);
     check!("gain_ctrl.mgc_inc_gain_step", g.mgc_inc_gain_step, 1..=8);
@@ -228,13 +264,41 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
         g.mgc_split_table_ctrl_inp_gain_mode,
         0..=2
     );
-    check!("gain_ctrl.agc_attack_delay_extra_margin_us", g.agc_attack_delay_extra_margin_us, 0..=31);
-    check!("gain_ctrl.agc_outer_thresh_high_dec_steps", g.agc_outer_thresh_high_dec_steps, 0..=15);
-    check!("gain_ctrl.agc_outer_thresh_low_inc_steps", g.agc_outer_thresh_low_inc_steps, 0..=15);
-    check!("gain_ctrl.agc_inner_thresh_high", g.agc_inner_thresh_high, 0..=127);
-    check!("gain_ctrl.agc_inner_thresh_low", g.agc_inner_thresh_low, 0..=127);
-    check!("gain_ctrl.agc_inner_thresh_high_dec_steps", g.agc_inner_thresh_high_dec_steps, 0..=7);
-    check!("gain_ctrl.agc_inner_thresh_low_inc_steps", g.agc_inner_thresh_low_inc_steps, 0..=7);
+    check!(
+        "gain_ctrl.agc_attack_delay_extra_margin_us",
+        g.agc_attack_delay_extra_margin_us,
+        0..=31
+    );
+    check!(
+        "gain_ctrl.agc_outer_thresh_high_dec_steps",
+        g.agc_outer_thresh_high_dec_steps,
+        0..=15
+    );
+    check!(
+        "gain_ctrl.agc_outer_thresh_low_inc_steps",
+        g.agc_outer_thresh_low_inc_steps,
+        0..=15
+    );
+    check!(
+        "gain_ctrl.agc_inner_thresh_high",
+        g.agc_inner_thresh_high,
+        0..=127
+    );
+    check!(
+        "gain_ctrl.agc_inner_thresh_low",
+        g.agc_inner_thresh_low,
+        0..=127
+    );
+    check!(
+        "gain_ctrl.agc_inner_thresh_high_dec_steps",
+        g.agc_inner_thresh_high_dec_steps,
+        0..=7
+    );
+    check!(
+        "gain_ctrl.agc_inner_thresh_low_inc_steps",
+        g.agc_inner_thresh_low_inc_steps,
+        0..=7
+    );
     check!(
         "gain_ctrl.adc_small_overload_exceed_counter",
         g.adc_small_overload_exceed_counter,
@@ -245,7 +309,11 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
         g.adc_large_overload_exceed_counter,
         0..=15
     );
-    check!("gain_ctrl.adc_large_overload_inc_steps", g.adc_large_overload_inc_steps, 0..=15);
+    check!(
+        "gain_ctrl.adc_large_overload_inc_steps",
+        g.adc_large_overload_inc_steps,
+        0..=15
+    );
     check!(
         "gain_ctrl.lmt_overload_large_exceed_counter",
         g.lmt_overload_large_exceed_counter,
@@ -256,24 +324,52 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
         g.lmt_overload_small_exceed_counter,
         0..=15
     );
-    check!("gain_ctrl.lmt_overload_large_inc_steps", g.lmt_overload_large_inc_steps, 0..=7);
-    check!("gain_ctrl.dig_saturation_exceed_counter", g.dig_saturation_exceed_counter, 0..=15);
+    check!(
+        "gain_ctrl.lmt_overload_large_inc_steps",
+        g.lmt_overload_large_inc_steps,
+        0..=7
+    );
+    check!(
+        "gain_ctrl.dig_saturation_exceed_counter",
+        g.dig_saturation_exceed_counter,
+        0..=15
+    );
     check!("gain_ctrl.dig_gain_step_size", g.dig_gain_step_size, 0..=7);
     check!(
         "gain_ctrl.f_agc_dec_pow_measurement_duration",
         g.f_agc_dec_pow_measurement_duration,
         16..=u32::MAX
     );
-    check!("gain_ctrl.f_agc_lp_thresh_increment_steps", g.f_agc_lp_thresh_increment_steps, 1..=8);
+    check!(
+        "gain_ctrl.f_agc_lp_thresh_increment_steps",
+        g.f_agc_lp_thresh_increment_steps,
+        1..=8
+    );
     check!(
         "gain_ctrl.f_agc_lock_level_gain_increase_upper_limit",
         g.f_agc_lock_level_gain_increase_upper_limit,
         0..=63
     );
-    check!("gain_ctrl.f_agc_lpf_final_settling_steps", g.f_agc_lpf_final_settling_steps, 0..=3);
-    check!("gain_ctrl.f_agc_lmt_final_settling_steps", g.f_agc_lmt_final_settling_steps, 0..=3);
-    check!("gain_ctrl.f_agc_final_overrange_count", g.f_agc_final_overrange_count, 0..=7);
-    check!("gain_ctrl.f_agc_optimized_gain_offset", g.f_agc_optimized_gain_offset, 0..=15);
+    check!(
+        "gain_ctrl.f_agc_lpf_final_settling_steps",
+        g.f_agc_lpf_final_settling_steps,
+        0..=3
+    );
+    check!(
+        "gain_ctrl.f_agc_lmt_final_settling_steps",
+        g.f_agc_lmt_final_settling_steps,
+        0..=3
+    );
+    check!(
+        "gain_ctrl.f_agc_final_overrange_count",
+        g.f_agc_final_overrange_count,
+        0..=7
+    );
+    check!(
+        "gain_ctrl.f_agc_optimized_gain_offset",
+        g.f_agc_optimized_gain_offset,
+        0..=15
+    );
     check!(
         "gain_ctrl.f_agc_rst_gla_stronger_sig_thresh_above_ll",
         g.f_agc_rst_gla_stronger_sig_thresh_above_ll,
@@ -294,9 +390,17 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
         g.f_agc_power_measurement_duration_in_state5,
         16..=u32::MAX
     );
-    check!("gain_ctrl.f_agc_large_overload_inc_steps", g.f_agc_large_overload_inc_steps, 0..=7);
+    check!(
+        "gain_ctrl.f_agc_large_overload_inc_steps",
+        g.f_agc_large_overload_inc_steps,
+        0..=7
+    );
 
-    check!("dc_offset.update_events", settings.dc_offset.update_events, 0..=7);
+    check!(
+        "dc_offset.update_events",
+        settings.dc_offset.update_events,
+        0..=7
+    );
     check!("rssi.duration", settings.rssi.duration, 1..=u32::MAX);
 
     let t = &settings.txmon;
@@ -307,7 +411,11 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
     check!("txmon.tx2_front_end_gain", t.tx2_front_end_gain, 0..=3);
     check!("txmon.tx1_lo_cm", t.tx1_lo_cm, 0..=63);
     check!("txmon.tx2_lo_cm", t.tx2_lo_cm, 0..=63);
-    check!("txmon.low_high_gain_threshold_mdb", t.low_high_gain_threshold_mdb, 0..=63_999);
+    check!(
+        "txmon.low_high_gain_threshold_mdb",
+        t.low_high_gain_threshold_mdb,
+        0..=63_999
+    );
     Ok(())
 }
 
@@ -400,7 +508,9 @@ impl Default for Ad9361Settings {
             ctrl_outs: CtrlOutsConfig::default(),
             elna: ElnaConfig::default(),
             trx_synth_max_fref: MAX_SYNTH_FREF,
-            duplex: Duplex::Fdd { independent_mode: false },
+            duplex: Duplex::Fdd {
+                independent_mode: false,
+            },
             rx_lo_frequency: RxLoFrequency::from_hz(2_400_000_000),
             tx_lo_frequency: TxLoFrequency::from_hz(2_400_000_000),
             gain_ctrl: GainControl::default(),
@@ -475,7 +585,9 @@ impl Ad9361Config {
         )
         .map_err(|_| ConfigError::ClockChain)?;
 
-        let max_fref = settings.trx_synth_max_fref.clamp(MIN_SYNTH_FREF, MAX_SYNTH_FREF);
+        let max_fref = settings
+            .trx_synth_max_fref
+            .clamp(MIN_SYNTH_FREF, MAX_SYNTH_FREF);
         let synth_ref = ref_div_sel(ref_clk.get(), max_fref);
         if synth_ref.to_raw() == 0 {
             return Err(ConfigError::SynthReference);
@@ -508,5 +620,4 @@ impl Ad9361Config {
     pub fn reference_clock(&self) -> ReferenceClock {
         self.ref_clk
     }
-
 }

@@ -120,7 +120,9 @@ where
     R::Error: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InitFailure").field("error", &self.error).finish_non_exhaustive()
+        f.debug_struct("InitFailure")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
     }
 }
 

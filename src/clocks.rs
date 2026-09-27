@@ -190,7 +190,10 @@ where
     S: SpiDevice<u8>,
     I: DataInterface,
 {
-    pub(crate) async fn read_clock_scaler(&mut self, clock: Ad9361Clock) -> Result<ClockMulDiv, S::Error> {
+    pub(crate) async fn read_clock_scaler(
+        &mut self,
+        clock: Ad9361Clock,
+    ) -> Result<ClockMulDiv, S::Error> {
         fn scaler_to_mul_div(scaler: u2) -> ClockMulDiv {
             match scaler.value() {
                 0 => ClockMulDiv { mult: 1, div: 1 },
@@ -206,8 +209,14 @@ where
                 scaler_to_mul_div(self.read_reg::<ClockControl>().await?.ref_freq_scaler())
             }
             Ad9361Clock::RxRef => {
-                let msb = self.read_reg::<RefDivideConfig1>().await?.rx_ref_divider_msb();
-                let lsb = self.read_reg::<RefDivideConfig2>().await?.rx_ref_divider_lsb();
+                let msb = self
+                    .read_reg::<RefDivideConfig1>()
+                    .await?
+                    .rx_ref_divider_msb();
+                let lsb = self
+                    .read_reg::<RefDivideConfig2>()
+                    .await?
+                    .rx_ref_divider_lsb();
 
                 scaler_to_mul_div(u2::new(((msb as u8) << 1) | (lsb as u8)))
             }
@@ -223,7 +232,8 @@ where
             }
             Ad9361Clock::R2 => {
                 let dec = self
-                    .read_reg::<RxEnableFilterControl>().await?
+                    .read_reg::<RxEnableFilterControl>()
+                    .await?
                     .dec3_enable_decimation();
                 ClockMulDiv {
                     mult: 1,
@@ -246,7 +256,8 @@ where
             }
             Ad9361Clock::RxSampl => {
                 let tmp = self
-                    .read_reg::<RxEnableFilterControl>().await?
+                    .read_reg::<RxEnableFilterControl>()
+                    .await?
                     .rx_fir_enable_decimation();
 
                 let div = if tmp.value() == 0 {
@@ -266,7 +277,8 @@ where
             }
             Ad9361Clock::T2 => {
                 let tmp = self
-                    .read_reg::<TxEnableFilterControl>().await?
+                    .read_reg::<TxEnableFilterControl>()
+                    .await?
                     .thb3_enable_interp();
                 ClockMulDiv {
                     mult: 1,
@@ -289,7 +301,8 @@ where
             }
             Ad9361Clock::TxSampl => {
                 let tmp = self
-                    .read_reg::<TxEnableFilterControl>().await?
+                    .read_reg::<TxEnableFilterControl>()
+                    .await?
                     .tx_fir_enable_interpolation();
 
                 let div = if tmp.value() == 0 {
@@ -349,51 +362,70 @@ where
 
     pub(crate) async fn read_clock_rates(&mut self) -> Result<Ad9361ClockRates, S::Error> {
         let tx_ref = self
-            .read_clock_scaler(Ad9361Clock::TxRef).await?
+            .read_clock_scaler(Ad9361Clock::TxRef)
+            .await?
             .rate_from_parent(self.ref_clk_in);
         let rx_ref = self
-            .read_clock_scaler(Ad9361Clock::RxRef).await?
+            .read_clock_scaler(Ad9361Clock::RxRef)
+            .await?
             .rate_from_parent(self.ref_clk_in);
         let bb_ref = self
-            .read_clock_scaler(Ad9361Clock::BbRef).await?
+            .read_clock_scaler(Ad9361Clock::BbRef)
+            .await?
             .rate_from_parent(self.ref_clk_in);
 
-        let bbpll = self.read_bbpll_clock_scaler().await?.rate_from_parent(bb_ref);
+        let bbpll = self
+            .read_bbpll_clock_scaler()
+            .await?
+            .rate_from_parent(bb_ref);
 
         let adc = self
-            .read_clock_scaler(Ad9361Clock::Adc).await?
+            .read_clock_scaler(Ad9361Clock::Adc)
+            .await?
             .rate_from_parent(bbpll);
         let r2 = self
-            .read_clock_scaler(Ad9361Clock::R2).await?
+            .read_clock_scaler(Ad9361Clock::R2)
+            .await?
             .rate_from_parent(adc);
         let r1 = self
-            .read_clock_scaler(Ad9361Clock::R1).await?
+            .read_clock_scaler(Ad9361Clock::R1)
+            .await?
             .rate_from_parent(r2);
         let clkrf = self
-            .read_clock_scaler(Ad9361Clock::ClkRf).await?
+            .read_clock_scaler(Ad9361Clock::ClkRf)
+            .await?
             .rate_from_parent(r1);
         let rx_sampl = self
-            .read_clock_scaler(Ad9361Clock::RxSampl).await?
+            .read_clock_scaler(Ad9361Clock::RxSampl)
+            .await?
             .rate_from_parent(clkrf);
 
         let dac = self
-            .read_clock_scaler(Ad9361Clock::Dac).await?
+            .read_clock_scaler(Ad9361Clock::Dac)
+            .await?
             .rate_from_parent(adc);
         let t2 = self
-            .read_clock_scaler(Ad9361Clock::T2).await?
+            .read_clock_scaler(Ad9361Clock::T2)
+            .await?
             .rate_from_parent(dac);
         let t1 = self
-            .read_clock_scaler(Ad9361Clock::T1).await?
+            .read_clock_scaler(Ad9361Clock::T1)
+            .await?
             .rate_from_parent(t2);
         let clktf = self
-            .read_clock_scaler(Ad9361Clock::ClkTf).await?
+            .read_clock_scaler(Ad9361Clock::ClkTf)
+            .await?
             .rate_from_parent(t1);
         let tx_sampl = self
-            .read_clock_scaler(Ad9361Clock::TxSampl).await?
+            .read_clock_scaler(Ad9361Clock::TxSampl)
+            .await?
             .rate_from_parent(clktf);
 
         // the RFPLLs hang off RX_REFCLK/TX_REFCLK, not the ADC/DAC datapath
-        let rx_rfpll = self.read_rfpll_scaler(false).await?.rate_from_parent(rx_ref);
+        let rx_rfpll = self
+            .read_rfpll_scaler(false)
+            .await?
+            .rate_from_parent(rx_ref);
         let tx_rfpll = self.read_rfpll_scaler(true).await?.rate_from_parent(tx_ref);
 
         Ok(Ad9361ClockRates {
@@ -420,12 +452,15 @@ where
     /// `ad9361_set_dcxo_tune()`.
     pub(crate) async fn set_dcxo_trim(&mut self, trim: DcxoTrim) -> Result<(), S::Error> {
         let fine = trim.fine;
-        self.write_reg(DcxoCoarseTune::default().with_dcxo_tune_coarse(trim.coarse)).await?;
+        self.write_reg(DcxoCoarseTune::default().with_dcxo_tune_coarse(trim.coarse))
+            .await?;
 
         self.write_reg(
             DcxoFineTuneLow::default().with_dcxo_tune_fine_low(u5::extract_u16(fine.value(), 0)),
-        ).await?;
-        self.write_reg(DcxoFineTuneHigh((fine.value() >> 5) as u8)).await?;
+        )
+        .await?;
+        self.write_reg(DcxoFineTuneHigh((fine.value() >> 5) as u8))
+            .await?;
 
         Ok(())
     }
@@ -533,72 +568,84 @@ where
         match clock {
             Ad9361Clock::BbRef => {
                 let scaler = ref_scaler()?;
-                self.modify_reg::<ClockControl>(|reg| reg.with_ref_freq_scaler(u2::new(scaler))).await?;
+                self.modify_reg::<ClockControl>(|reg| reg.with_ref_freq_scaler(u2::new(scaler)))
+                    .await?;
             }
             Ad9361Clock::RxRef => {
                 let scaler = ref_scaler()?;
                 self.modify_reg::<RefDivideConfig1>(|reg| {
                     reg.with_rx_ref_divider_msb(scaler & 0b10 != 0)
-                }).await?;
+                })
+                .await?;
                 self.modify_reg::<RefDivideConfig2>(|reg| {
                     reg.with_rx_ref_divider_lsb(scaler & 0b01 != 0)
-                }).await?;
+                })
+                .await?;
             }
             Ad9361Clock::TxRef => {
                 let scaler = ref_scaler()?;
-                self.modify_reg::<RefDivideConfig2>(|reg| {
-                    reg.with_tx_ref_divider(u2::new(scaler))
-                }).await?;
+                self.modify_reg::<RefDivideConfig2>(|reg| reg.with_tx_ref_divider(u2::new(scaler)))
+                    .await?;
             }
             Ad9361Clock::Adc => {
                 if mult != 1 || !div.is_power_of_two() || !(2..=64).contains(&div) {
                     return Err(Ad9361Error::InvalidRate);
                 }
-                self.modify_reg::<BbPll>(|reg| reg.with_bbpll_divider(u3::new(div.ilog2() as u8))).await?;
+                self.modify_reg::<BbPll>(|reg| reg.with_bbpll_divider(u3::new(div.ilog2() as u8)))
+                    .await?;
             }
             Ad9361Clock::R2 => {
                 divider(3)?;
                 self.modify_reg::<RxEnableFilterControl>(|reg| {
                     reg.with_dec3_enable_decimation(u2::new(div as u8 - 1))
-                }).await?;
+                })
+                .await?;
             }
             Ad9361Clock::R1 => {
                 divider(2)?;
-                self.modify_reg::<RxEnableFilterControl>(|reg| reg.with_rhb2_en(div == 2)).await?;
+                self.modify_reg::<RxEnableFilterControl>(|reg| reg.with_rhb2_en(div == 2))
+                    .await?;
             }
             Ad9361Clock::ClkRf => {
                 divider(2)?;
-                self.modify_reg::<RxEnableFilterControl>(|reg| reg.with_rhb1_en(div == 2)).await?;
+                self.modify_reg::<RxEnableFilterControl>(|reg| reg.with_rhb1_en(div == 2))
+                    .await?;
             }
             Ad9361Clock::RxSampl => {
                 let field = fir_field(self.fir.rx_bypassed())?;
                 self.modify_reg::<RxEnableFilterControl>(|reg| {
                     reg.with_rx_fir_enable_decimation(u2::new(field))
-                }).await?;
+                })
+                .await?;
             }
             Ad9361Clock::Dac => {
                 divider(2)?;
-                self.modify_reg::<BbPll>(|reg| reg.with_dac_clk_div2(div == 2)).await?;
+                self.modify_reg::<BbPll>(|reg| reg.with_dac_clk_div2(div == 2))
+                    .await?;
             }
             Ad9361Clock::T2 => {
                 divider(3)?;
                 self.modify_reg::<TxEnableFilterControl>(|reg| {
                     reg.with_thb3_enable_interp(u2::new(div as u8 - 1))
-                }).await?;
+                })
+                .await?;
             }
             Ad9361Clock::T1 => {
                 divider(2)?;
-                self.modify_reg::<TxEnableFilterControl>(|reg| reg.with_thb2_en(div == 2)).await?;
+                self.modify_reg::<TxEnableFilterControl>(|reg| reg.with_thb2_en(div == 2))
+                    .await?;
             }
             Ad9361Clock::ClkTf => {
                 divider(2)?;
-                self.modify_reg::<TxEnableFilterControl>(|reg| reg.with_thb1_en(div == 2)).await?;
+                self.modify_reg::<TxEnableFilterControl>(|reg| reg.with_thb1_en(div == 2))
+                    .await?;
             }
             Ad9361Clock::TxSampl => {
                 let field = fir_field(self.fir.tx_bypassed())?;
                 self.modify_reg::<TxEnableFilterControl>(|reg| {
                     reg.with_tx_fir_enable_interpolation(u2::new(field))
-                }).await?;
+                })
+                .await?;
             }
         }
 
@@ -624,7 +671,10 @@ where
         let parent = self.parent_rate(clock);
         let ratio = ClockMulDiv::closest(rate, parent).ok_or(Ad9361Error::InvalidRate)?;
         self.set_clock_scaler(clock, &ratio).await?;
-        *self.clock_rate_mut(clock) = self.read_clock_scaler(clock).await?.rate_from_parent(parent);
+        *self.clock_rate_mut(clock) = self
+            .read_clock_scaler(clock)
+            .await?
+            .rate_from_parent(parent);
         Ok(())
     }
 }

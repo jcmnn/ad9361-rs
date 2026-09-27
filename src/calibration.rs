@@ -7,20 +7,19 @@ use super::interface::DataInterface;
 use arbitrary_int::{u2, u3, u4, u5, u6};
 use core::num::NonZeroU32;
 
-
 use fugit::HertzU32;
 
 use super::{
-ForcedEnsmState,     Engine, Ad9361Error, BbDcOffsetAtten, BbDcOffsetCount, BbDcOffsetShift, CalibrationConfig1,
+    Ad9361Error, BbDcOffsetAtten, BbDcOffsetCount, BbDcOffsetShift, CalibrationConfig1,
     CalibrationConfig2, CalibrationConfig3, CalibrationControl, Capacitor, Channel, Config0,
-    DcOffsetConfig2, InvertBits, Kexp1, Kexp2, MagFtestThresh, MagFtestThresh2,
-    ParallelPortConf2, QuadCalControl, QuadCalCount, QuadCalNcoFreqPhaseOffset, QuadCalStatusTx1,
-    QuadCalStatusTx2, QuadSettleCount, Register, Resistor, RfDcOffsetAtten, RfDcOffsetConfig1,
-    RfDcOffsetCount, RxQuadGain2, TxEnableFilterControl, TxQuadFullLmtGain, TxQuadLpfGain,
+    DcOffsetConfig2, Engine, ForcedEnsmState, InvertBits, Kexp1, Kexp2, MagFtestThresh,
+    MagFtestThresh2, ParallelPortConf2, QuadCalControl, QuadCalCount, QuadCalNcoFreqPhaseOffset,
+    QuadCalStatusTx1, QuadCalStatusTx2, QuadSettleCount, Register, Resistor, RfDcOffsetAtten,
+    RfDcOffsetConfig1, RfDcOffsetCount, Rx1TuneControl, Rx2TuneControl, RxBbbwKhz, RxBbbwMhz,
+    RxBbfC3Lsb, RxBbfC3Msb, RxBbfR2346, RxBbfTuneConfig, RxBbfTuneDivide, RxMixGmConfig, RxMixLoCm,
+    RxQuadGain2, RxTiaConfig, Tia1CLsb, Tia1CMsb, Tia2CLsb, Tia2CMsb, TxBbfTuneDivider,
+    TxBbfTuneMode, TxEnableFilterControl, TxQuadFullLmtGain, TxQuadLpfGain, TxTuneControl,
     WaitCount,
-    Rx1TuneControl, Rx2TuneControl, RxBbbwKhz, RxBbbwMhz, RxBbfC3Lsb, RxBbfC3Msb, RxBbfR2346,
-    RxBbfTuneConfig, RxBbfTuneDivide, RxMixGmConfig, RxMixLoCm, RxTiaConfig, Tia1CLsb, Tia1CMsb,
-    Tia2CLsb, Tia2CMsb, TxBbfTuneDivider, TxBbfTuneMode, TxTuneControl,
 };
 
 /// RX DC offset tracking. The defaults rarely need touching.
@@ -149,31 +148,45 @@ where
         let divider = NonZeroU32::new(div).ok_or(Ad9361Error::InvalidRate)?;
 
         self.write_reg(RxBbfTuneDivide(div as u8)).await?;
-        self.modify_reg::<RxBbfTuneConfig>(|reg| reg.with_rx_bbf_tune_divide(div >> 8 != 0)).await?;
+        self.modify_reg::<RxBbfTuneConfig>(|reg| reg.with_rx_bbf_tune_divide(div >> 8 != 0))
+            .await?;
 
-        self.write_reg(RxBbbwMhz::from_raw((bw / 1_000_000) as u8)).await?;
+        self.write_reg(RxBbbwMhz::from_raw((bw / 1_000_000) as u8))
+            .await?;
         let khz = div_round_closest((bw % 1_000_000) * 128, 1_000_000).min(127);
         self.write_reg(RxBbbwKhz::from_raw(khz as u8)).await?;
 
-        self.write_reg(RxMixLoCm::default().with_rx_mix_lo_cm(u6::new(0x3F))).await?;
-        self.write_reg(RxMixGmConfig::default().with_rx_mix_gm_pload(u2::new(3))).await?;
+        self.write_reg(RxMixLoCm::default().with_rx_mix_lo_cm(u6::new(0x3F)))
+            .await?;
+        self.write_reg(RxMixGmConfig::default().with_rx_mix_gm_pload(u2::new(3)))
+            .await?;
 
-        self.write_reg(Rx1TuneControl::default().with_rx1_tune_resample(true)).await?;
-        self.write_reg(Rx2TuneControl::default().with_rx2_tune_resample(true)).await?;
+        self.write_reg(Rx1TuneControl::default().with_rx1_tune_resample(true))
+            .await?;
+        self.write_reg(Rx2TuneControl::default().with_rx2_tune_resample(true))
+            .await?;
 
         // done when RX_BB_TUNE_CAL clears itself
-        let result = self.run_calibration(CalibrationControl::default().with_rx_bb_tune_cal(true).raw_value()).await;
+        let result = self
+            .run_calibration(
+                CalibrationControl::default()
+                    .with_rx_bb_tune_cal(true)
+                    .raw_value(),
+            )
+            .await;
 
         self.write_reg(
             Rx1TuneControl::default()
                 .with_rx1_tune_resample(true)
                 .with_rx1_pd_tune(true),
-        ).await?;
+        )
+        .await?;
         self.write_reg(
             Rx2TuneControl::default()
                 .with_rx2_tune_resample(true)
                 .with_rx2_pd_tune(true),
-        ).await?;
+        )
+        .await?;
 
         result.map(|()| divider)
     }
@@ -191,14 +204,21 @@ where
         let div = 511.min(bbpll.to_raw().div_ceil(target));
 
         self.write_reg(TxBbfTuneDivider(div as u8)).await?;
-        self.modify_reg::<TxBbfTuneMode>(|reg| reg.with_tx_bbf_tune_divider(div >> 8 != 0)).await?;
+        self.modify_reg::<TxBbfTuneMode>(|reg| reg.with_tx_bbf_tune_divider(div >> 8 != 0))
+            .await?;
 
         let tune = TxTuneControl::default()
             .with_tuner_resample(true)
             .with_tune_ctrl(u2::new(1));
         self.write_reg(tune).await?;
 
-        let result = self.run_calibration(CalibrationControl::default().with_tx_bb_tune_cal(true).raw_value()).await;
+        let result = self
+            .run_calibration(
+                CalibrationControl::default()
+                    .with_tx_bb_tune_cal(true)
+                    .raw_value(),
+            )
+            .await;
 
         self.write_reg(tune.with_pd_tune(true)).await?;
 
@@ -206,7 +226,10 @@ where
     }
 
     /// TX secondary filter (`ad9361_tx_bb_second_filter_calib()`).
-    pub(crate) async fn tx_bb_second_filter_calib(&mut self, tx_bb_bw: HertzU32) -> Result<(), S::Error> {
+    pub(crate) async fn tx_bb_second_filter_calib(
+        &mut self,
+        tx_bb_bw: HertzU32,
+    ) -> Result<(), S::Error> {
         let bw = tx_bb_bw.to_raw().clamp(530_000, 20_000_000);
 
         // BBBW * 5PI
@@ -321,8 +344,7 @@ where
         let sqrt_inv_rc_tconst_1e3 = (invrc_tconst_1e6 as u32).isqrt();
         let maxsnr = 640 / 160;
         let scaled_adc_clk_1e6 = div_round_closest(adc, 640);
-        let inv_scaled_adc_clk_1e3 =
-            div_round_closest(640_000_000, div_round_closest(adc, 1000));
+        let inv_scaled_adc_clk_1e3 = div_round_closest(640_000_000, div_round_closest(adc, 1000));
         let tmp_1e3 = div_round_closest(
             980_000 + 20 * 1000.max(div_round_closest(inv_scaled_adc_clk_1e3, maxsnr)),
             1000,
@@ -360,13 +382,11 @@ where
             / (invrc_tconst_1e6 * 77);
         data[11] = tmp.min(255) as u8;
         data[12] = 127.min(
-            0u32.wrapping_sub(500_000)
-                .wrapping_add(
-                    80u32
-                        .wrapping_mul(sqrt_inv_rc_tconst_1e3)
-                        .wrapping_mul(min_sqrt_term_1e3),
-                )
-                / 1_000_000,
+            0u32.wrapping_sub(500_000).wrapping_add(
+                80u32
+                    .wrapping_mul(sqrt_inv_rc_tconst_1e3)
+                    .wrapping_mul(min_sqrt_term_1e3),
+            ) / 1_000_000,
         ) as u8;
 
         let neg_half = (-3i32).wrapping_mul((invrc_tconst_1e6 >> 1) as u32 as i32) as i64 as u64;
@@ -386,7 +406,8 @@ where
         data[22] = 127.min(data[21] as u32 * tmp_1e3 / 1000) as u8;
         data[23] = data[21];
         data[24] = 0x2E;
-        data[25] = (128 + 63_000.min(div_round_closest(63 * scaled_adc_clk_1e6, 1000)) / 1000) as u8;
+        data[25] =
+            (128 + 63_000.min(div_round_closest(63 * scaled_adc_clk_1e6, 1000)) / 1000) as u8;
         data[26] = 63.min(
             63 * scaled_adc_clk_1e6 / 1_000_000 * (920 + 80 * inv_scaled_adc_clk_1e3 / 1000) / 1000,
         ) as u8;
@@ -403,7 +424,8 @@ where
         data[37] = 0x2C;
 
         for (i, byte) in data.iter().enumerate() {
-            self.write_bytes(&[*byte], arbitrary_int::u10::new(0x200 + i as u16)).await?;
+            self.write_bytes(&[*byte], arbitrary_int::u10::new(0x200 + i as u16))
+                .await?;
         }
         Ok(())
     }
@@ -411,15 +433,24 @@ where
     /// `ad9361_bb_dc_offset_calib()`.
     pub(crate) async fn bb_dc_offset_calib(&mut self) -> Result<(), Ad9361Error<S::Error>> {
         self.write_reg(BbDcOffsetCount(0x3F)).await?;
-        self.write_reg(BbDcOffsetShift::default().with_bb_dc_m_shift(u5::new(0xF))).await?;
-        self.write_reg(BbDcOffsetAtten::default().with_bb_dc_offset_atten(u4::new(1))).await?;
+        self.write_reg(BbDcOffsetShift::default().with_bb_dc_m_shift(u5::new(0xF)))
+            .await?;
+        self.write_reg(BbDcOffsetAtten::default().with_bb_dc_offset_atten(u4::new(1)))
+            .await?;
 
-        self.run_calibration(CalibrationControl::default().with_bbdc_cal(true).raw_value())
-            .await
+        self.run_calibration(
+            CalibrationControl::default()
+                .with_bbdc_cal(true)
+                .raw_value(),
+        )
+        .await
     }
 
     /// `ad9361_rf_dc_offset_calib()`, `rx_freq` in Hz.
-    pub(crate) async fn rf_dc_offset_calib(&mut self, rx_freq: u64) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn rf_dc_offset_calib(
+        &mut self,
+        rx_freq: u64,
+    ) -> Result<(), Ad9361Error<S::Error>> {
         let dc = self.cal.dc_offset;
         self.write_reg(WaitCount(0x20)).await?;
 
@@ -433,48 +464,67 @@ where
             RfDcOffsetConfig1::default()
                 .with_rf_dc_calibration_count(u4::new(4))
                 .with_dac_fs(u2::new(dac_fs)),
-        ).await?;
-        self.write_reg(RfDcOffsetAtten::default().with_rf_dc_offset_atten(u5::new(atten & 0x1F))).await?;
+        )
+        .await?;
+        self.write_reg(RfDcOffsetAtten::default().with_rf_dc_offset_atten(u5::new(atten & 0x1F)))
+            .await?;
 
         self.write_reg(
             DcOffsetConfig2::default()
                 .with_use_wait_counter_for_rf_dc_init_cal(true)
                 .with_dc_offset_update(u3::new(3)),
-        ).await?;
+        )
+        .await?;
 
         let inv = InvertBits::default().with_invert_rx1_rf_dc_cgout_word(true);
         self.write_reg(if self.cal.rx_phase_inversion {
             inv
         } else {
             inv.with_invert_rx2_rf_dc_cgout_word(true)
-        }).await?;
+        })
+        .await?;
 
-        self.run_calibration(CalibrationControl::default().with_rfdc_cal(true).raw_value())
-            .await
+        self.run_calibration(
+            CalibrationControl::default()
+                .with_rfdc_cal(true)
+                .raw_value(),
+        )
+        .await
     }
 
     /// `ad9361_tracking_control()`.
-    pub(crate) async fn tracking_control(&mut self, tracking: &TrackingConfig) -> Result<(), S::Error> {
+    pub(crate) async fn tracking_control(
+        &mut self,
+        tracking: &TrackingConfig,
+    ) -> Result<(), S::Error> {
         self.write_reg(
             CalibrationConfig2::default()
                 .with_calibration_config2_dflt(u2::new(3))
                 .with_k_exp_phase(u5::new(0x15)),
-        ).await?;
+        )
+        .await?;
         self.write_reg(
             CalibrationConfig3::default()
                 .with_prevent_pos_loop_gain(true)
                 .with_k_exp_amplitude(u5::new(0x15)),
-        ).await?;
+        )
+        .await?;
         self.write_reg(
             DcOffsetConfig2::default()
                 .with_use_wait_counter_for_rf_dc_init_cal(true)
                 .with_dc_offset_update(u3::new(self.cal.dc_offset.update_events & 0x7))
                 .with_enable_bb_dc_offset_tracking(tracking.bbdc)
                 .with_enable_rf_offset_tracking(tracking.rfdc),
-        ).await?;
+        )
+        .await?;
         self.modify_reg::<RxQuadGain2>(|reg| {
-            reg.with_correction_word_decimation_m(u3::new(if tracking.qec_slow_mode { 4 } else { 0 }))
-        }).await?;
+            reg.with_correction_word_decimation_m(u3::new(if tracking.qec_slow_mode {
+                4
+            } else {
+                0
+            }))
+        })
+        .await?;
 
         let (ch1, ch2) = match (tracking.rx_quad, self.mode.rx2tx2, self.mode.rx1tx1_use_rx) {
             (false, _, _) => (false, false),
@@ -490,7 +540,8 @@ where
                 .with_enable_corr_word_decimation(true)
                 .with_enable_tracking_mode_ch1(ch1)
                 .with_enable_tracking_mode_ch2(ch2),
-        ).await
+        )
+        .await
     }
 
     /// Redoes the baseband filter and ADC cals for new bandwidths (`__ad9361_update_rf_bandwidth()`).
@@ -505,7 +556,8 @@ where
         self.tx_bb_analog_filter_calib(tx, bbpll).await?;
         self.rx_tia_calib(rx).await?;
         self.tx_bb_second_filter_calib(tx).await?;
-        self.rx_adc_setup(bbpll, self.clk.rates.adc, rxbbf_div).await
+        self.rx_adc_setup(bbpll, self.clk.rates.adc, rxbbf_div)
+            .await
     }
 
     /// One TX quad cal run (`__ad9361_tx_quad_calib()`). Bit 1 = LO leakage converged, bit 0 =
@@ -520,18 +572,24 @@ where
             QuadCalNcoFreqPhaseOffset::default()
                 .with_rx_nco_freq(u2::new(rxnco_word & 0x3))
                 .with_rx_nco_phase_offset(u5::new(phase & 0x1F)),
-        ).await?;
+        )
+        .await?;
         let control = QuadCalControl::default()
             .with_settle_main_enable(true)
             .with_dc_offset_enable(true)
             .with_gain_enable(true)
             .with_phase_enable(true)
             .with_m_decim(u2::new(decim & 0x3));
-        self.write_reg(control.with_quad_cal_soft_reset(true)).await?;
+        self.write_reg(control.with_quad_cal_soft_reset(true))
+            .await?;
         self.write_reg(control).await?;
 
-        self.run_calibration(CalibrationControl::default().with_tx_quad_cal(true).raw_value())
-            .await?;
+        self.run_calibration(
+            CalibrationControl::default()
+                .with_tx_quad_cal(true)
+                .raw_value(),
+        )
+        .await?;
 
         let status = if self.mode.rx1tx1_use_tx == Channel::Ch2 {
             self.read_reg::<QuadCalStatusTx2>().await?.to_raw()
@@ -563,7 +621,8 @@ where
         let (count, start) = find_opt(&field);
         let phase = ((start + count / 2) & 0x1F) as u32;
         self.cal.last_tx_quad_cal_phase = Some(phase);
-        self.tx_quad_calib_once(phase as u8, rxnco_word, decim).await?;
+        self.tx_quad_calib_once(phase as u8, rxnco_word, decim)
+            .await?;
         Ok(())
     }
 
@@ -629,16 +688,19 @@ where
         let inverted = self.cal.rx_phase_inversion;
         let mut saved_invert_bits = None;
         if inverted {
-            self.modify_reg::<ParallelPortConf2>(|reg| reg.with_invert_rx2(false)).await?;
+            self.modify_reg::<ParallelPortConf2>(|reg| reg.with_invert_rx2(false))
+                .await?;
             saved_invert_bits = Some(self.read_reg::<InvertBits>().await?);
             self.write_reg(
                 InvertBits::default()
                     .with_invert_rx1_rf_dc_cgout_word(true)
                     .with_invert_rx2_rf_dc_cgout_word(true),
-            ).await?;
+            )
+            .await?;
         }
 
-        self.modify_reg::<Kexp2>(|reg| reg.with_tx_nco_freq(u2::new(txnco_word as u8))).await?;
+        self.modify_reg::<Kexp2>(|reg| reg.with_tx_nco_freq(u2::new(txnco_word as u8)))
+            .await?;
         self.write_reg(QuadCalCount(0xFF)).await?;
         self.write_reg(
             Kexp1::default()
@@ -646,7 +708,8 @@ where
                 .with_kexp_tx_comp(u2::new(3))
                 .with_kexp_dc_i(u2::new(3))
                 .with_kexp_dc_q(u2::new(3)),
-        ).await?;
+        )
+        .await?;
         self.write_reg(MagFtestThresh(0x03)).await?;
         self.write_reg(MagFtestThresh2(0x03)).await?;
 
@@ -663,7 +726,8 @@ where
 
         // restore even if the cal failed
         if inverted {
-            self.modify_reg::<ParallelPortConf2>(|reg| reg.with_invert_rx2(true)).await?;
+            self.modify_reg::<ParallelPortConf2>(|reg| reg.with_invert_rx2(true))
+                .await?;
             if let Some(bits) = saved_invert_bits {
                 self.write_reg(bits).await?;
             }
@@ -690,7 +754,9 @@ where
             if converged != TX_QUAD_CONVERGED {
                 // failed, try the last phase offset
                 if let Some(last) = self.cal.last_tx_quad_cal_phase.filter(|phase| *phase < 31) {
-                    converged = self.tx_quad_calib_once(last as u8, rxnco_word, decim).await?;
+                    converged = self
+                        .tx_quad_calib_once(last as u8, rxnco_word, decim)
+                        .await?;
                 }
             } else {
                 self.cal.last_tx_quad_cal_phase = Some(phase as u32);
@@ -712,7 +778,8 @@ where
             rfdc: false,
             rx_quad: false,
             ..tracking
-        }).await?;
+        })
+        .await?;
         let saved_ensm = self.ensm_force_state(ForcedEnsmState::Alert).await?;
 
         let (rx_bw, tx_bw) = (self.cal.current_rx_bw / 2, self.cal.current_tx_bw / 2);
@@ -738,15 +805,20 @@ where
             rfdc: false,
             rx_quad: false,
             ..tracking
-        }).await?;
+        })
+        .await?;
         let saved_ensm = self.ensm_force_state(ForcedEnsmState::Alert).await?;
 
         let result = async {
             self.update_rf_bandwidth_filters(rf_rx_bw, rf_tx_bw).await?;
             self.cal.current_rx_bw = rf_rx_bw;
             self.cal.current_tx_bw = rf_tx_bw;
-            self.tx_quad_calib((rf_rx_bw / 2).to_raw(), (rf_tx_bw / 2).to_raw(), RxPhase::Auto)
-                .await
+            self.tx_quad_calib(
+                (rf_rx_bw / 2).to_raw(),
+                (rf_tx_bw / 2).to_raw(),
+                RxPhase::Auto,
+            )
+            .await
         }
         .await;
 

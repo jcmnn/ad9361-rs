@@ -310,7 +310,8 @@ impl PortConfig {
     }
 
     pub(crate) fn conf3(&self) -> ParallelPortConf3 {
-        let conf3 = ParallelPortConf3::default().with_fdd_rx_rate_2tx_rate(self.fdd_rx_rate_2x_tx_rate);
+        let conf3 =
+            ParallelPortConf3::default().with_fdd_rx_rate_2tx_rate(self.fdd_rx_rate_2x_tx_rate);
         match self.mode {
             PortMode::Lvds(_) => conf3.with_lvds_mode(true),
             PortMode::Cmos(cmos) => {
@@ -364,8 +365,14 @@ impl Default for PortConfig {
     fn default() -> Self {
         Self {
             mode: PortMode::Lvds(LvdsConfig::default()),
-            rx_delays: PortDelays { clock: u4::new(0), data: u4::new(4) },
-            tx_delays: PortDelays { clock: u4::new(7), data: u4::new(0) },
+            rx_delays: PortDelays {
+                clock: u4::new(0),
+                data: u4::new(4),
+            },
+            tx_delays: PortDelays {
+                clock: u4::new(7),
+                data: u4::new(0),
+            },
             rx_swap_iq: true,
             tx_swap_iq: true,
             rx_swap_channels: false,
@@ -472,7 +479,8 @@ where
             let bit = 1u8 << dac.index();
             let bars = (reg.auxdac_manual_bar().value() & !bit) | if disable { bit } else { 0 };
             reg.with_auxdac_manual_bar(u2::new(bars))
-        }).await?;
+        })
+        .await?;
 
         let val_mv = val_mv.max(306);
 
@@ -497,7 +505,8 @@ where
                     AuxDac1Config::default()
                         .with_auxdac_1_word_lsb(lsb)
                         .with_auxdac_1_vref(vref),
-                ).await?;
+                )
+                .await?;
             }
             Dac::Dac2 => {
                 self.write_reg(AuxDac2Word(msb)).await?;
@@ -505,7 +514,8 @@ where
                     AuxDac2Config::default()
                         .with_auxdac_2_word_lsb(lsb)
                         .with_auxdac_2_vref(vref),
-                ).await?;
+                )
+                .await?;
             }
         }
 
@@ -522,16 +532,22 @@ where
             reg.with_auxdac_auto_tx_bar(bars(config.dac1_in_tx_en, config.dac2_in_tx_en))
                 .with_auxdac_auto_rx_bar(bars(config.dac1_in_rx_en, config.dac2_in_rx_en))
                 .with_auxdac_init_bar(bars(config.dac1_in_alert_en, config.dac2_in_alert_en))
-        }).await?;
+        })
+        .await?;
 
         self.modify_reg::<ExternalLnaControl>(|reg| {
             reg.with_auxdac_manual_select(config.auxdac_manual_mode_en)
-        }).await?;
+        })
+        .await?;
 
-        self.write_reg(AuxDac1RxDelay(config.dac1_rx_delay_us)).await?;
-        self.write_reg(AuxDac1TxDelay(config.dac1_tx_delay_us)).await?;
-        self.write_reg(AuxDac2RxDelay(config.dac2_rx_delay_us)).await?;
-        self.write_reg(AuxDac2TxDelay(config.dac2_tx_delay_us)).await?;
+        self.write_reg(AuxDac1RxDelay(config.dac1_rx_delay_us))
+            .await?;
+        self.write_reg(AuxDac1TxDelay(config.dac1_tx_delay_us))
+            .await?;
+        self.write_reg(AuxDac2RxDelay(config.dac2_rx_delay_us))
+            .await?;
+        self.write_reg(AuxDac2TxDelay(config.dac2_tx_delay_us))
+            .await?;
 
         Ok(())
     }
@@ -551,7 +567,8 @@ where
                         | ((config.gpo1_slave_tx_en as u8) << 1)
                         | (config.gpo0_slave_tx_en as u8),
                 )),
-        ).await?;
+        )
+        .await?;
 
         self.write_reg(
             GpoForceAndInit::default()
@@ -562,7 +579,8 @@ where
                         | ((config.gpo1_inactive_state_high_en as u8) << 1)
                         | (config.gpo0_inactive_state_high_en as u8),
                 )),
-        ).await?;
+        )
+        .await?;
 
         self.write_reg(Gpo0RxDelay(config.gpo0_rx_delay_us)).await?;
         self.write_reg(Gpo0TxDelay(config.gpo0_tx_delay_us)).await?;
@@ -576,7 +594,8 @@ where
         // from ad9361.c: GPO manual mode clashes with ENSM slave and eLNA auto mode
         self.modify_reg::<ExternalLnaControl>(|reg| {
             reg.with_gpo_manual_select(config.gpo_manual_mode_en)
-        }).await?;
+        })
+        .await?;
 
         Ok(())
     }
@@ -584,17 +603,15 @@ where
     /// `ad9361_en_dis_tx()`.
     pub(crate) async fn set_tx_channels(&mut self, tx1: bool, tx2: bool) -> Result<(), S::Error> {
         let field = (tx1 as u8) | ((tx2 as u8) << 1);
-        self.modify_reg::<TxEnableFilterControl>(|reg| {
-            reg.with_tx_channel_enable(u2::new(field))
-        }).await
+        self.modify_reg::<TxEnableFilterControl>(|reg| reg.with_tx_channel_enable(u2::new(field)))
+            .await
     }
 
     /// `ad9361_en_dis_rx()`.
     pub(crate) async fn set_rx_channels(&mut self, rx1: bool, rx2: bool) -> Result<(), S::Error> {
         let field = (rx1 as u8) | ((rx2 as u8) << 1);
-        self.modify_reg::<RxEnableFilterControl>(|reg| {
-            reg.with_rx_channel_enable(u2::new(field))
-        }).await
+        self.modify_reg::<RxEnableFilterControl>(|reg| reg.with_rx_channel_enable(u2::new(field)))
+            .await
     }
 
     /// `ad9361_rf_port_setup()` with `is_out = true`. The TX monitor inputs from the C driver
@@ -608,7 +625,8 @@ where
             InputSelect::default()
                 .with_rx_input(u6::new(rx_input.select_bits()))
                 .with_tx_output(tx_output == TxOutput::B),
-        ).await
+        )
+        .await
     }
 
     /// `ad9361_pp_port_setup()` with `restore_c3 = false`.
@@ -624,7 +642,8 @@ where
         self.write_reg(LvdsInvertCtrl2(invert2)).await?;
 
         if port.invert.rx2 {
-            self.modify_reg::<InvertBits>(|reg| reg.with_invert_rx2_rf_dc_cgout_word(false)).await?;
+            self.modify_reg::<InvertBits>(|reg| reg.with_invert_rx2_rf_dc_cgout_word(false))
+                .await?;
         }
 
         Ok(())
@@ -637,7 +656,10 @@ where
 
     /// `ad9361_auxadc_setup()`, off the cached BBPLL rate. `InvalidRate` if that can't be
     /// divided down to the AuxADC clock. The config already checks the initial rate.
-    pub(crate) async fn auxadc_setup(&mut self, config: &AuxAdcConfig) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn auxadc_setup(
+        &mut self,
+        config: &AuxAdcConfig,
+    ) -> Result<(), Ad9361Error<S::Error>> {
         let bbpll = self.clk.rates.bbpll.to_raw();
         let temp_decimation = config.temp_sensor_decimation.field();
         let aux_decimation = config.auxadc_decimation.field();
@@ -647,9 +669,8 @@ where
             .filter(|div| *div < 64)
             .ok_or(Ad9361Error::InvalidRate)?;
         // interval is in units of 2^29 BBPLL cycles, rounded
-        let interval = (config.temp_time_interval_ms as u64 * (bbpll / 1000) as u64
-            + (1 << 28))
-            >> 29;
+        let interval =
+            (config.temp_time_interval_ms as u64 * (bbpll / 1000) as u64 + (1 << 28)) >> 29;
 
         self.write_reg(TempOffset(config.offset as u8)).await?;
         self.write_reg(StartTempReading::default()).await?;
@@ -657,29 +678,41 @@ where
             TempSense2::default()
                 .with_measurement_time_interval(u7::new((interval & 0x7F) as u8))
                 .with_temp_sense_periodic_enable(config.periodic_temp_measurement),
-        ).await?;
-        self.write_reg(TempSensorConfig::default().with_temp_sensor_decimation(temp_decimation)).await?;
+        )
+        .await?;
+        self.write_reg(TempSensorConfig::default().with_temp_sensor_decimation(temp_decimation))
+            .await?;
         self.write_reg(
             AuxadcClockDivider::default().with_auxadc_clock_divider(u6::new(clock_divider)),
-        ).await?;
-        self.write_reg(AuxadcConfig::default().with_aux_adc_decimation(aux_decimation)).await?;
+        )
+        .await?;
+        self.write_reg(AuxadcConfig::default().with_aux_adc_decimation(aux_decimation))
+            .await?;
         Ok(())
     }
 
     /// `ad9361_ctrl_outs_setup()`.
-    pub(crate) async fn ctrl_outs_setup(&mut self, config: &CtrlOutsConfig) -> Result<(), S::Error> {
+    pub(crate) async fn ctrl_outs_setup(
+        &mut self,
+        config: &CtrlOutsConfig,
+    ) -> Result<(), S::Error> {
         self.write_reg(ControlOutputPointer(config.index)).await?;
-        self.write_reg(ControlOutputEnable::from_raw(config.en_mask)).await
+        self.write_reg(ControlOutputEnable::from_raw(config.en_mask))
+            .await
     }
 
     /// `ad9361_set_ref_clk_cycles()`.
-    pub(crate) async fn set_ref_clk_cycles(&mut self, ref_clk: ReferenceClock) -> Result<(), S::Error> {
+    pub(crate) async fn set_ref_clk_cycles(
+        &mut self,
+        ref_clk: ReferenceClock,
+    ) -> Result<(), S::Error> {
         // 1-128 MHz, ReferenceClock guarantees it
         let mhz = ref_clk.get().to_raw() / 1_000_000;
         self.write_reg(
             ReferenceClockCycles::default()
                 .with_reference_clock_cycles_per_us(u7::new((mhz - 1) as u8)),
-        ).await
+        )
+        .await
     }
 
     /// `ad9361_setup_ext_lna()`.
@@ -687,9 +720,12 @@ where
         self.modify_reg::<ExternalLnaControl>(|reg| {
             reg.with_external_lna1_ctrl(config.elna_1_control_en)
                 .with_external_lna2_ctrl(config.elna_2_control_en)
-        }).await?;
-        self.write_reg(ExtLnaHighGain::default().with_ext_lna_high_gain(config.gain.field())).await?;
-        self.write_reg(ExtLnaLowGain::default().with_ext_lna_low_gain(config.bypass_loss.field())).await?;
+        })
+        .await?;
+        self.write_reg(ExtLnaHighGain::default().with_ext_lna_high_gain(config.gain.field()))
+            .await?;
+        self.write_reg(ExtLnaLowGain::default().with_ext_lna_low_gain(config.bypass_loss.field()))
+            .await?;
         Ok(())
     }
 }
