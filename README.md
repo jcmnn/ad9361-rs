@@ -2,20 +2,21 @@ AD936X driver
 ========
 
 A `no_std` Rust driver for the Analog Devices AD936X RF transceivers, ported from the AD9361
-driver of the [no-OS](https://github.com/analogdevicesinc/no-OS) repository. It also drives the
-[AXI AD9361 IP core](https://analogdevicesinc.github.io/hdl/library/axi_ad9361/index.html) in the
-FPGA (with the `axi-ad9361` crate), which the digital interface is tuned with.
+driver of the [no-OS](https://github.com/analogdevicesinc/no-OS) repository.
+
+The FPGA side of the data port is a trait, `DataInterface`. `AxiCores` implements it for the
+[AXI AD9361 IP core](https://analogdevicesinc.github.io/hdl/library/axi_ad9361/index.html) with
+the `axi-ad9361` crate (`axi` feature, on by default).
 
 # Usage
 
 ```rust,ignore
-let ad9361 = Uninitialized::new(spi, resetb, ReferenceClock::new(40.MHz())?, axi)
-    .configure(Ad9361Settings::default())?
-    .init()
-    .await?;
+let config = Ad9361Config::new(Ad9361Settings::default(), ReferenceClock::new(40.MHz())?)?;
+let cores = AxiCores::new(axi.take_adc_no_init().unwrap(), axi.take_dac_no_init().unwrap());
+let ad9361 = Ad9361::init(spi, resetb, cores, &config).await?;
 ```
 
-`Ad9361Settings::default()` is the setup from the no-OS `main.c` (2R2T, FDD, 30.72 MSPS, 2.4 GHz).
+`Ad9361Settings::default()` is 2R2T, FDD, 30.72 MSPS with both LOs at 2.4 GHz.
 See the crate docs for a complete example, the requirements (SPI mode 1, a time driver for
 `embassy-time`) and the caveats.
 
@@ -23,8 +24,8 @@ See the crate docs for a complete example, the requirements (SPI mode 1, a time 
 
 - Setup like `ad9361_setup()`: clock chain, RF synths, ports, gain control, calibrations, FIRs
   and the digital interface tuning with the AXI AD9361 core.
-- Change the sample rate, LO frequencies, bandwidths, TX attenuation, RX gain mode and FIRs
-  while running.
+- Change the sample rate, LO frequencies, bandwidths, TX attenuation, RX gain, DCXO trim and
+  FIRs while running.
 - Types for values with a limited range, like `TxAttenuation` and `RxLoFrequency`.
 - Host tests against a fake register file.
 

@@ -17,9 +17,10 @@ pub(super) fn bbpll_words(rate: u64, parent: u64) -> (u32, u32) {
     (integer as u32, fract as u32)
 }
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
     /// RX synth register address, or the TX one, which sits 0x40 higher.
     pub(super) fn synth_addr<Reg: Register>(tx: bool) -> u10 {
@@ -27,24 +28,24 @@ where
     }
 
     /// Writes the RX synth register, or the TX twin with `tx`.
-    pub(super) fn write_synth_reg<Reg: Register>(&mut self, reg: Reg, tx: bool) -> Result<(), S::Error> {
-        self.write_bytes(&[reg.to_raw()], Self::synth_addr::<Reg>(tx))
+    pub(super) async fn write_synth_reg<Reg: Register>(&mut self, reg: Reg, tx: bool) -> Result<(), S::Error> {
+        self.write_bytes(&[reg.to_raw()], Self::synth_addr::<Reg>(tx)).await
     }
 
     /// Charge pump cal for the RX or TX synth (`ad9361_txrx_synth_cp_calib()`).
-    pub async fn txrx_synth_cp_calib(
+    pub(crate) async fn txrx_synth_cp_calib(
         &mut self,
         ref_clk: HertzU32,
         tx: bool,
     ) -> Result<(), Ad9361Error<S::Error>> {
         // copied from no-OS, where they're marked "REVIST"
-        self.write_synth_reg(RxCpLevelDetect::from_raw(0x17), tx)?;
-        self.write_synth_reg(RxDsmSetup1::from_raw(0x00), tx)?;
-        self.write_synth_reg(RxLoGenPowerMode::from_raw(0x00), tx)?;
-        self.write_synth_reg(RxVcoLdo::from_raw(0x0B), tx)?;
-        self.write_synth_reg(RxVcoPdOverrides::from_raw(0x02), tx)?;
-        self.write_synth_reg(RxCpCurrent::from_raw(0x80), tx)?;
-        self.write_synth_reg(RxCpConfig::default().with_cp_offset_off(true), tx)?;
+        self.write_synth_reg(RxCpLevelDetect::from_raw(0x17), tx).await?;
+        self.write_synth_reg(RxDsmSetup1::from_raw(0x00), tx).await?;
+        self.write_synth_reg(RxLoGenPowerMode::from_raw(0x00), tx).await?;
+        self.write_synth_reg(RxVcoLdo::from_raw(0x0B), tx).await?;
+        self.write_synth_reg(RxVcoPdOverrides::from_raw(0x02), tx).await?;
+        self.write_synth_reg(RxCpCurrent::from_raw(0x80), tx).await?;
+        self.write_synth_reg(RxCpConfig::default().with_cp_offset_off(true), tx).await?;
 
         // See Table 70 "Example Calibration Times for RF VCO Cal"
         let count = if self.mode.fdd {
@@ -60,28 +61,28 @@ where
                 .with_vco_cal_count(u2::new(count))
                 .with_fb_clock_adv(u2::new(2)),
             tx,
-        )?;
+        ).await?;
 
         // needs FDD during cal. stored conf3 stays as is, so `pp_port_restore_conf3()` puts
         // half duplex back
         if !self.mode.fdd {
-            self.modify_reg::<ParallelPortConf3>(|reg| reg.with_half_duplex_mode(false))?;
+            self.modify_reg::<ParallelPortConf3>(|reg| reg.with_half_duplex_mode(false)).await?;
         }
 
-        self.write_reg(EnsmConfig2::default().with_dual_synth_mode(true))?;
+        self.write_reg(EnsmConfig2::default().with_dual_synth_mode(true)).await?;
         self.write_reg(
             EnsmConfig1::default()
                 .with_force_alert_state(true)
                 .with_to_alert(true),
-        )?;
-        self.write_reg(EnsmMode::default().with_fdd_mode(true))?;
+        ).await?;
+        self.write_reg(EnsmMode::default().with_fdd_mode(true)).await?;
 
         self.write_synth_reg(
             RxCpConfig::default()
                 .with_cp_offset_off(true)
                 .with_cp_cal_enable(true),
             tx,
-        )?;
+        ).await?;
 
         self.wait_until::<RxCalStatus>(
             Self::synth_addr::<RxCalStatus>(tx),
@@ -91,23 +92,23 @@ where
         .await
     }
 
-    pub(super) fn read_synth_reg<Reg: Register>(&mut self, tx: bool) -> Result<Reg, S::Error> {
+    pub(super) async fn read_synth_reg<Reg: Register>(&mut self, tx: bool) -> Result<Reg, S::Error> {
         let mut raw = [0u8; 1];
-        self.read_bytes(&mut raw, Self::synth_addr::<Reg>(tx))?;
+        self.read_bytes(&mut raw, Self::synth_addr::<Reg>(tx)).await?;
         Ok(Reg::from_raw(raw[0]))
     }
 
-    pub(super) fn modify_synth_reg<Reg: Register>(
+    pub(super) async fn modify_synth_reg<Reg: Register>(
         &mut self,
         tx: bool,
         f: impl FnOnce(Reg) -> Reg,
     ) -> Result<(), S::Error> {
-        let reg = self.read_synth_reg::<Reg>(tx)?;
-        self.write_synth_reg(f(reg), tx)
+        let reg = self.read_synth_reg::<Reg>(tx).await?;
+        self.write_synth_reg(f(reg), tx).await
     }
 
     /// VCO and loop filter settings for `vco_freq` from the tables (`ad9361_rfpll_vco_init()`).
-    pub(super) fn rfpll_vco_init(&mut self, tx: bool, vco_freq: u64, ref_clk: HertzU32) -> Result<(), S::Error> {
+    pub(super) async fn rfpll_vco_init(&mut self, tx: bool, vco_freq: u64, ref_clk: HertzU32) -> Result<(), S::Error> {
         let range = match ref_clk.to_raw() {
             0..50_000_000 => 0,
             50_000_000..=70_000_000 => 1,
@@ -141,48 +142,48 @@ where
                 .with_vco_output_level(u4::new(e.vco_output_level))
                 .with_porb_vco_logic(true),
             tx,
-        )?;
+        ).await?;
         self.modify_synth_reg::<RxAlcVaractor>(tx, |reg| {
             reg.with_vco_varactor(u4::new(e.vco_varactor))
-        })?;
+        }).await?;
         self.write_synth_reg(
             RxVcoBias1::default()
                 .with_vco_bias_ref(u3::new(e.vco_bias_ref))
                 .with_vco_bias_tcf(u2::new(e.vco_bias_tcf)),
             tx,
-        )?;
+        ).await?;
         self.write_synth_reg(
             RxForceVcoTune1::default().with_vco_cal_offset(u4::new(e.vco_cal_offset)),
             tx,
-        )?;
+        ).await?;
         self.write_synth_reg(
             RxVcoVaractorControl1::default()
                 .with_vco_varactor_reference(u4::new(e.vco_varactor_reference)),
             tx,
-        )?;
-        self.write_synth_reg(RxVcoCalRef::default().with_vco_cal_ref_tcf(u3::new(0)), tx)?;
+        ).await?;
+        self.write_synth_reg(RxVcoCalRef::default().with_vco_cal_ref_tcf(u3::new(0)), tx).await?;
         self.write_synth_reg(
             RxVcoVaractorControl0::default()
                 .with_vco_varactor_offset(u4::new(0))
                 .with_vco_varactor_reference_tcf(u3::new(7)),
             tx,
-        )?;
+        ).await?;
         self.modify_synth_reg::<RxCpCurrent>(tx, |reg| {
             reg.with_charge_pump_current(u6::new(e.charge_pump_current))
-        })?;
+        }).await?;
         self.write_synth_reg(
             RxLoopFilter1::default()
                 .with_loop_filter_c2(u4::new(e.lf_c2))
                 .with_loop_filter_c1(u4::new(e.lf_c1)),
             tx,
-        )?;
+        ).await?;
         self.write_synth_reg(
             RxLoopFilter2::default()
                 .with_loop_filter_r1(u4::new(e.lf_r1))
                 .with_loop_filter_c3(u4::new(e.lf_c3)),
             tx,
-        )?;
-        self.write_synth_reg(RxLoopFilter3::default().with_loop_filter_r3(u4::new(e.lf_r3)), tx)?;
+        ).await?;
+        self.write_synth_reg(RxLoopFilter3::default().with_loop_filter_r3(u4::new(e.lf_r3)), tx).await?;
         Ok(())
     }
 
@@ -220,15 +221,15 @@ where
 
         // TDD can skip VCO cal on the way from TX/RX to alert
         if self.mode.tdd_skip_vco_cal {
-            self.modify_synth_reg::<RxPfdConfig>(tx, |reg| reg.with_bypass_ld_synth(false))?;
+            self.modify_synth_reg::<RxPfdConfig>(tx, |reg| reg.with_bypass_ld_synth(false)).await?;
         }
 
         let mut synth_tx = tx;
         let lock = loop {
-            self.rfpll_vco_init(synth_tx, vco, parent)?;
+            self.rfpll_vco_init(synth_tx, vco, parent).await?;
 
             // upper integer bits share the register with other stuff
-            let upper = self.read_synth_reg::<RxIntegerByte1>(synth_tx)?.raw_value() & !0x07;
+            let upper = self.read_synth_reg::<RxIntegerByte1>(synth_tx).await?.raw_value() & !0x07;
             let buf = [
                 (fract >> 16) as u8 & 0x7F,
                 (fract >> 8) as u8,
@@ -237,14 +238,14 @@ where
                 integer as u8,
             ];
             let start = if synth_tx { TX_SYNTH_WORD_ADDR } else { RX_SYNTH_WORD_ADDR };
-            self.write_bytes(&buf, start)?;
+            self.write_bytes(&buf, start).await?;
             self.modify_reg::<RfPllDividers>(|reg| {
                 if synth_tx {
                     reg.with_tx_vco_divider(u4::new(vco_div))
                 } else {
                     reg.with_rx_vco_divider(u4::new(vco_div))
                 }
-            })?;
+            }).await?;
 
             let lock = self
                 .wait_until::<RxCpOverrangeVcoLock>(
@@ -272,7 +273,7 @@ where
         };
 
         if self.mode.tdd_skip_vco_cal {
-            self.modify_synth_reg::<RxPfdConfig>(tx, |reg| reg.with_bypass_ld_synth(true))?;
+            self.modify_synth_reg::<RxPfdConfig>(tx, |reg| reg.with_bypass_ld_synth(true)).await?;
         }
 
         lock
@@ -284,7 +285,7 @@ where
     /// more than the threshold.
     ///
     /// TODO: the C driver triggers external band switching here too.
-    pub async fn set_rfpll_rate(
+    pub(crate) async fn set_rfpll_rate(
         &mut self,
         tx: bool,
         freq: HertzU64,
@@ -296,10 +297,10 @@ where
         let parent = if tx { self.clk.rates.tx_ref } else { self.clk.rates.rx_ref };
         self.program_rfpll(tx, freq.to_raw(), parent).await?;
         if !tx {
-            self.load_gain_table(freq.to_raw(), GainTableDest::Both)?;
+            self.load_gain_table(freq.to_raw(), GainTableDest::Both).await?;
         }
 
-        let rate = self.read_rfpll_scaler(tx)?.rate_from_parent(parent);
+        let rate = self.read_rfpll_scaler(tx).await?.rate_from_parent(parent);
         if tx {
             self.clk.rates.tx_rfpll = rate;
         } else {
@@ -327,7 +328,7 @@ where
     ) -> Result<(), Ad9361Error<S::Error>> {
         for _ in 0..20_000 {
             let mut raw = [0u8; 1];
-            self.read_bytes(&mut raw, address)?;
+            self.read_bytes(&mut raw, address).await?;
             if done(Reg::from_raw(raw[0])) {
                 return Ok(());
             }
@@ -354,35 +355,35 @@ where
         let (integer, fract) = bbpll_words(rate, parent);
         let integer = u8::try_from(integer).map_err(|_| Ad9361Error::InvalidRate)?;
 
-        self.write_reg(CpCurrent::default().with_charge_pump_current(u6::new(icp as u8)))?;
+        self.write_reg(CpCurrent::default().with_charge_pump_current(u6::new(icp as u8))).await?;
         // LOOP_FILTER_3, _2, _1 (burst counts down)
-        self.write_bytes(&[0x35, 0x5B, 0xE8], LoopFilter3::ADDRESS)?;
+        self.write_bytes(&[0x35, 0x5B, 0xE8], LoopFilter3::ADDRESS).await?;
         // allow cal, count 1024 for best accuracy
         self.write_reg(
             VcoControl::default()
                 .with_freq_cal_enable(true)
                 .with_freq_cal_count_length(u2::new(3)),
-        )?;
+        ).await?;
         // cal clock REFCLK/4, more accurate
-        self.write_reg(SdmControl::default().with_cal_clock_div_4(true))?;
+        self.write_reg(SdmControl::default().with_cal_clock_div_4(true)).await?;
 
-        self.write_reg(IntegerBbFreqWord(integer))?;
-        self.write_reg(FractBbFreqWord3(fract as u8))?;
-        self.write_reg(FractBbFreqWord2((fract >> 8) as u8))?;
-        self.write_reg(FractBbFreqWord1((fract >> 16) as u8))?;
+        self.write_reg(IntegerBbFreqWord(integer)).await?;
+        self.write_reg(FractBbFreqWord3(fract as u8)).await?;
+        self.write_reg(FractBbFreqWord2((fract >> 8) as u8)).await?;
+        self.write_reg(FractBbFreqWord1((fract >> 16) as u8)).await?;
 
         // start cal, then clear the bit
         self.write_reg(
             SdmControl1::default()
                 .with_init_bb_fo_cal(true)
                 .with_bbpll_reset_bar(true),
-        )?;
-        self.write_reg(SdmControl1::default().with_bbpll_reset_bar(true))?;
+        ).await?;
+        self.write_reg(SdmControl1::default().with_bbpll_reset_bar(true)).await?;
 
         // more BBPLL KV and phase margin
-        self.write_reg(VcoProgram1(0x86))?;
-        self.write_reg(VcoProgram2(0x01))?;
-        self.write_reg(VcoProgram2(0x05))?;
+        self.write_reg(VcoProgram1(0x86)).await?;
+        self.write_reg(VcoProgram2(0x01)).await?;
+        self.write_reg(VcoProgram2(0x05)).await?;
 
         self.wait_until::<Ch1Overflow>(Ch1Overflow::ADDRESS, |reg| reg.bbpll_lock(), 120)
             .await
@@ -390,7 +391,7 @@ where
 
     /// Sets the BBPLL to the closest rate the cached BB reference allows, within
     /// [`MIN_BBPLL_FREQ`]..=[`MAX_BBPLL_FREQ`]. Updates the cache.
-    pub async fn set_bbpll_rate(&mut self, rate: HertzU32) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn set_bbpll_rate(&mut self, rate: HertzU32) -> Result<(), Ad9361Error<S::Error>> {
         if self.clk.rates.bbpll == rate {
             return Ok(());
         }
@@ -403,7 +404,7 @@ where
         let rounded = PllScaler { fract, integer }.rate_from_parent(parent);
 
         self.program_bbpll(rounded, parent).await?;
-        self.clk.rates.bbpll = self.read_bbpll_clock_scaler()?.rate_from_parent(parent);
+        self.clk.rates.bbpll = self.read_bbpll_clock_scaler().await?.rate_from_parent(parent);
         Ok(())
     }
 }

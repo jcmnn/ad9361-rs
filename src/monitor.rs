@@ -1,9 +1,12 @@
 //! RSSI setup, RSSI gain step cal, TX monitor (`ad9361_rssi_setup()`,
 //! `ad9361_rssi_gain_step_calib()`, `ad9361_txmon_setup()`).
 
+use embedded_hal_async::spi::SpiDevice;
+
+use super::interface::DataInterface;
 use arbitrary_int::{u2, u3, u4, u5, u6};
 use embassy_time::Timer;
-use embedded_hal::spi::SpiDevice;
+
 
 use super::{
 ForcedEnsmState, Engine, Ad9361Error, CalibrationControl, Config, GainDiffWorderrorWrite,
@@ -44,7 +47,6 @@ pub struct RssiConfiguration {
 }
 
 impl Default for RssiConfiguration {
-    /// no-OS defaults
     fn default() -> Self {
         Self {
             restart_mode: RssiRestartMode::GainChangeOccurs,
@@ -78,7 +80,6 @@ pub struct TxMonitorConfig {
 }
 
 impl Default for TxMonitorConfig {
-    /// The no-OS defaults.
     fn default() -> Self {
         Self {
             track_en: false,
@@ -107,12 +108,13 @@ const GAIN_STEP_CALIB_REG_VAL: [[u8; 5]; 4] = [
 
 const RSSI_MAX_WEIGHT: u32 = 255;
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
     /// `ad9361_rssi_setup()`. `is_update` only refreshes what depends on the RX sample rate.
-    pub fn rssi_setup(
+    pub(crate) async fn rssi_setup(
         &mut self,
         ctrl: &RssiConfiguration,
         is_update: bool,
@@ -123,7 +125,7 @@ where
             }
             (ctrl.delay, ctrl.wait, ctrl.duration)
         } else {
-            let rate_khz = (self.clk.rates.rx_sampl.to_raw() + 500) / 1000;
+            let rate_khz = (self.clk.rates.rx_sample.to_raw() + 500) / 1000;
             let convert = |us: u32| (us * rate_khz + 500) / 1000;
             (convert(ctrl.delay), convert(ctrl.wait), convert(ctrl.duration))
         };
@@ -162,31 +164,31 @@ where
             MeasureDuration01::default()
                 .with_measurement_duration_0(u4::new(exponents[0]))
                 .with_measurement_duration_1(u4::new(exponents[1])),
-        )?;
+        ).await?;
         self.write_reg(
             MeasureDuration23::default()
                 .with_measurement_duration_2(u4::new(exponents[2]))
                 .with_measurement_duration_3(u4::new(exponents[3])),
-        )?;
-        self.write_reg(RssiWeight0(weights[0] as u8))?;
-        self.write_reg(RssiWeight1(weights[1] as u8))?;
-        self.write_reg(RssiWeight2(weights[2] as u8))?;
-        self.write_reg(RssiWeight3(weights[3] as u8))?;
-        self.write_reg(RssiDelay(delay))?;
-        self.write_reg(RssiWaitTime(wait))?;
+        ).await?;
+        self.write_reg(RssiWeight0(weights[0] as u8)).await?;
+        self.write_reg(RssiWeight1(weights[1] as u8)).await?;
+        self.write_reg(RssiWeight2(weights[2] as u8)).await?;
+        self.write_reg(RssiWeight3(weights[3] as u8)).await?;
+        self.write_reg(RssiDelay(delay)).await?;
+        self.write_reg(RssiWaitTime(wait)).await?;
 
         self.write_reg(
             RssiConfig::default()
                 .with_rssi_mode_select(u3::new(ctrl.restart_mode as u8))
                 .with_start_rssi_meas(ctrl.restart_mode == RssiRestartMode::SpiWriteToRegister)
                 .with_default_rssi_meas_mode(duration == 0 && count == 1),
-        )?;
+        ).await?;
         Ok(())
     }
 
     /// `ad9361_rssi_gain_step_calib()` for the current RX LO. The chip sits in alert while it
     /// runs. No-OS' factory table path (`rssi_skip_calib`) isn't supported.
-    pub async fn rssi_gain_step_calib(&mut self) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn rssi_gain_step_calib(&mut self) -> Result<(), Ad9361Error<S::Error>> {
         let lo_freq = self.clk.rates.rx_rfpll.to_raw();
         let table = &GAIN_STEP_CALIB_REG_VAL[match lo_freq {
             0..1_300_000_000 => 0,
@@ -203,26 +205,26 @@ where
         self.write_reg(
             MaxMixerCalibrationGainIndex::default()
                 .with_max_mixer_calibration_gain_index(u5::new(0x0F)),
-        )?;
-        self.write_reg(MeasureDuration::default().with_gain_cal_meas_duration(u4::new(0x0E)))?;
-        self.write_reg(SettleTime::default().with_settle_time(u6::new(0x3F)))?;
+        ).await?;
+        self.write_reg(MeasureDuration::default().with_gain_cal_meas_duration(u4::new(0x0E))).await?;
+        self.write_reg(SettleTime::default().with_settle_time(u6::new(0x3F))).await?;
         self.write_reg(
             RssiConfig::default()
                 .with_rssi_mode_select(u3::new(3))
                 .with_default_rssi_meas_mode(true),
-        )?;
-        self.write_reg(MeasureDuration01::default().with_measurement_duration_0(u4::new(0x0E)))?;
-        self.write_reg(LnaGain::from_raw(table[0]))?;
+        ).await?;
+        self.write_reg(MeasureDuration01::default().with_measurement_duration_0(u4::new(0x0E))).await?;
+        self.write_reg(LnaGain::from_raw(table[0])).await?;
 
-        self.write_reg(select(table_clock))?;
+        self.write_reg(select(table_clock)).await?;
         for i in 0..4 {
-            self.write_reg(WordAddress(i))?;
-            self.write_reg(GainDiffWorderrorWrite::from_raw(table[i as usize + 1]))?;
-            self.write_reg(select(table_clock).with_write_lna_gain_diff(true))?;
+            self.write_reg(WordAddress(i)).await?;
+            self.write_reg(GainDiffWorderrorWrite::from_raw(table[i as usize + 1])).await?;
+            self.write_reg(select(table_clock).with_write_lna_gain_diff(true)).await?;
             Timer::after_micros(3).await; // Wait for the data to fully write to the table
         }
-        self.write_reg(table_clock)?;
-        self.write_reg(Config::default())?;
+        self.write_reg(table_clock).await?;
+        self.write_reg(Config::default()).await?;
 
         let result = self
             .run_calibration(CalibrationControl::default().with_rx_gain_step_cal(true).raw_value())
@@ -234,70 +236,70 @@ where
             Config::default()
                 .with_calib_table_select(u2::new(1))
                 .with_read_select(true),
-        )?;
+        ).await?;
         for (i, error) in lna_error.iter_mut().enumerate() {
-            self.write_reg(WordAddress(i as u8))?;
-            *error = self.read_reg::<GainErrorRead>()?.to_raw();
+            self.write_reg(WordAddress(i as u8)).await?;
+            *error = self.read_reg::<GainErrorRead>().await?.to_raw();
         }
-        self.write_reg(Config::default().with_calib_table_select(u2::new(1)))?;
+        self.write_reg(Config::default().with_calib_table_select(u2::new(1))).await?;
         for (i, error) in mixer_error.iter_mut().enumerate() {
-            self.write_reg(WordAddress(i as u8))?;
-            *error = self.read_reg::<GainErrorRead>()?.to_raw();
+            self.write_reg(WordAddress(i as u8)).await?;
+            *error = self.read_reg::<GainErrorRead>().await?.to_raw();
         }
-        self.write_reg(Config::default())?;
+        self.write_reg(Config::default()).await?;
 
-        self.write_reg(select(table_clock))?;
+        self.write_reg(select(table_clock)).await?;
         for (i, error) in lna_error.iter().enumerate() {
-            self.write_reg(WordAddress(i as u8))?;
-            self.write_reg(GainDiffWorderrorWrite::from_raw(*error))?;
-            self.write_reg(select(table_clock).with_write_lna_error_table(true))?;
+            self.write_reg(WordAddress(i as u8)).await?;
+            self.write_reg(GainDiffWorderrorWrite::from_raw(*error)).await?;
+            self.write_reg(select(table_clock).with_write_lna_error_table(true)).await?;
         }
-        self.write_reg(select(table_clock))?;
+        self.write_reg(select(table_clock)).await?;
         for (i, error) in mixer_error.iter().enumerate() {
-            self.write_reg(WordAddress(i as u8))?;
-            self.write_reg(GainDiffWorderrorWrite::from_raw(*error))?;
-            self.write_reg(select(table_clock).with_write_mixer_error_table(true))?;
+            self.write_reg(WordAddress(i as u8)).await?;
+            self.write_reg(GainDiffWorderrorWrite::from_raw(*error)).await?;
+            self.write_reg(select(table_clock).with_write_mixer_error_table(true)).await?;
         }
-        self.write_reg(Config::default())?;
+        self.write_reg(Config::default()).await?;
 
-        self.ensm_restore_state(saved_ensm)?;
+        self.ensm_restore_state(saved_ensm).await?;
         result
     }
 
     /// `ad9361_txmon_setup()`.
-    pub fn txmon_setup(&mut self, ctrl: &TxMonitorConfig) -> Result<(), S::Error> {
+    pub(crate) async fn txmon_setup(&mut self, ctrl: &TxMonitorConfig) -> Result<(), S::Error> {
         let duration = (ctrl.duration as u32 / 16).checked_ilog2().unwrap_or(0) as u8;
         self.write_reg(
             TpmModeEnable::default()
                 .with_one_shot_mode(ctrl.one_shot_mode_en)
                 .with_tx_mon_duration(u4::new(duration & 0xF)),
-        )?;
+        ).await?;
 
-        self.write_reg(TxMonDelay(ctrl.delay as u8))?;
+        self.write_reg(TxMonDelay(ctrl.delay as u8)).await?;
         self.modify_reg::<TxLevelThresh>(|reg| {
             reg.with_tx_mon_delay_counter(u2::new((ctrl.delay >> 8) as u8 & 0x3))
-        })?;
+        }).await?;
 
         self.write_reg(
             TxMon1Config::default()
                 .with_tx_mon_1_lo_cm(u6::new(ctrl.tx1_lo_cm & 0x3F))
                 .with_tx_mon_1_gain(u2::new(ctrl.tx1_front_end_gain & 0x3)),
-        )?;
+        ).await?;
         self.write_reg(
             TxMon2Config::default()
                 .with_tx_mon_2_lo_cm(u6::new(ctrl.tx2_lo_cm & 0x3F))
                 .with_tx_mon_2_gain(u2::new(ctrl.tx2_front_end_gain & 0x3)),
-        )?;
+        ).await?;
 
-        self.write_reg(TxAttenThresh((ctrl.low_high_gain_threshold_mdb / 250) as u8))?;
+        self.write_reg(TxAttenThresh((ctrl.low_high_gain_threshold_mdb / 250) as u8)).await?;
         self.write_reg(
             TxMonHighGain::default().with_tx_mon_high_gain(u5::new(ctrl.high_gain_db & 0x1F)),
-        )?;
+        ).await?;
         self.write_reg(
             TxMonLowGain::default()
                 .with_tx_mon_track(ctrl.track_en)
                 .with_tx_mon_low_gain(u5::new(ctrl.low_gain_db & 0x1F)),
-        )?;
+        ).await?;
         Ok(())
     }
 }

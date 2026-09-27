@@ -1,5 +1,7 @@
 //! SPI access.
 
+use embedded_hal_async::spi::Operation;
+
 use super::*;
 
 /// Pulse reset.
@@ -12,7 +14,7 @@ pub(super) async fn reset<R: embedded_hal::digital::OutputPin>(resetb: &mut R) -
 }
 
 /// Writes 1-8 bytes, addresses count down from `addr`.
-pub(super) fn write_bytes<S: SpiDevice<u8>>(
+pub(super) async fn write_bytes<S: SpiDevice<u8>>(
     spi: &mut S,
     data: &[u8],
     addr: u10,
@@ -25,14 +27,11 @@ pub(super) fn write_bytes<S: SpiDevice<u8>>(
         (addr.value() & 0xFF) as u8,
     ];
 
-    spi.transaction(&mut [
-        embedded_hal::spi::Operation::Write(&ctrl_field),
-        embedded_hal::spi::Operation::Write(data),
-    ])
+    spi.transaction(&mut [Operation::Write(&ctrl_field), Operation::Write(data)]).await
 }
 
 /// Reads 1-8 bytes, addresses count down from `addr`.
-pub(super) fn read_bytes<S: SpiDevice<u8>>(
+pub(super) async fn read_bytes<S: SpiDevice<u8>>(
     spi: &mut S,
     out: &mut [u8],
     addr: u10,
@@ -45,44 +44,42 @@ pub(super) fn read_bytes<S: SpiDevice<u8>>(
         (addr.value() & 0xFF) as u8,
     ];
 
-    spi.transaction(&mut [
-        embedded_hal::spi::Operation::Write(&ctrl_field),
-        embedded_hal::spi::Operation::Read(out),
-    ])
+    spi.transaction(&mut [Operation::Write(&ctrl_field), Operation::Read(out)]).await
 }
 
-pub(super) fn read_reg<S: SpiDevice<u8>, Reg: Register>(spi: &mut S) -> Result<Reg, S::Error> {
+pub(super) async fn read_reg<S: SpiDevice<u8>, Reg: Register>(spi: &mut S) -> Result<Reg, S::Error> {
     let mut raw = [0u8; 1];
-    read_bytes(spi, &mut raw, Reg::ADDRESS)?;
+    read_bytes(spi, &mut raw, Reg::ADDRESS).await?;
     Ok(Reg::from_raw(raw[0]))
 }
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
-    pub fn write_bytes(&mut self, data: &[u8], addr: u10) -> Result<(), S::Error> {
-        write_bytes(&mut self.spi, data, addr)
+    pub(crate) async fn write_bytes(&mut self, data: &[u8], addr: u10) -> Result<(), S::Error> {
+        write_bytes(&mut self.spi, data, addr).await
     }
 
-    pub fn write_reg<Reg: Register>(&mut self, reg: Reg) -> Result<(), S::Error> {
-        self.write_bytes(&[reg.to_raw()], Reg::ADDRESS)
+    pub(crate) async fn write_reg<Reg: Register>(&mut self, reg: Reg) -> Result<(), S::Error> {
+        self.write_bytes(&[reg.to_raw()], Reg::ADDRESS).await
     }
 
-    pub fn read_bytes(&mut self, out: &mut [u8], addr: u10) -> Result<(), S::Error> {
-        read_bytes(&mut self.spi, out, addr)
+    pub(crate) async fn read_bytes(&mut self, out: &mut [u8], addr: u10) -> Result<(), S::Error> {
+        read_bytes(&mut self.spi, out, addr).await
     }
 
-    pub fn read_reg<Reg: Register>(&mut self) -> Result<Reg, S::Error> {
-        read_reg(&mut self.spi)
+    pub(crate) async fn read_reg<Reg: Register>(&mut self) -> Result<Reg, S::Error> {
+        read_reg(&mut self.spi).await
     }
 
     /// Read, change, write back.
-    pub fn modify_reg<Reg: Register>(
+    pub(crate) async fn modify_reg<Reg: Register>(
         &mut self,
         f: impl FnOnce(Reg) -> Reg,
     ) -> Result<(), S::Error> {
-        let reg = self.read_reg::<Reg>()?;
-        self.write_reg(f(reg))
+        let reg = self.read_reg::<Reg>().await?;
+        self.write_reg(f(reg)).await
     }
 }

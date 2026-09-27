@@ -17,12 +17,13 @@ const CLK_DIVIDERS: [[i32; 4]; 7] = [
     [1, 1, 1, 1],
 ];
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
     /// RX and TX path clocks for a TX sample rate. `rate_gov` 0 = highest oversampling, 1 = nominal.
-    pub fn calculate_rf_clock_chain(
+    pub(crate) fn calculate_rf_clock_chain(
         &self,
         tx_sample_rate: HertzU32,
         rate_gov: u32,
@@ -121,7 +122,7 @@ where
     }
 
     /// `ad9361_set_trx_clock_chain_freq()`.
-    pub async fn set_trx_clock_chain_freq(
+    pub(crate) async fn set_trx_clock_chain_freq(
         &mut self,
         freq: HertzU32,
     ) -> Result<(), Ad9361Error<S::Error>> {
@@ -136,7 +137,7 @@ where
     ) -> Result<(), Ad9361Error<S::Error>> {
         let (rx, tx) = self.calculate_rf_clock_chain(freq, self.clk.rate_governor)?;
         self.apply_trx_clock_chain(&rx, &tx).await?;
-        self.bb_clk_update()
+        self.bb_clk_update().await
     }
 }
 
@@ -192,8 +193,8 @@ pub(super) fn validate_trx_clock_chain<E>(
 /// RX: `bbpll -> converter (ADC) -> hb3 (R2) -> hb2 (R1) -> hb1 (CLKRF) -> sample`.
 /// TX: `bbpll -> converter (DAC) -> hb3 (T2) -> hb2 (T1) -> hb1 (CLKTF) -> sample`.
 ///
-/// The chip only has certain dividers, so not every combination works. [`Ad9361Config::new`]
-/// checks the limits. [`Self::DEFAULT_RX`] and [`Self::DEFAULT_TX`] are for 30.72 MSPS.
+/// The chip only has certain dividers, so not every combination works.
+/// [`Ad9361Config::new`](crate::Ad9361Config::new) checks the limits. [`Self::DEFAULT_RX`] and [`Self::DEFAULT_TX`] are for 30.72 MSPS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PathClocks {
     pub bbpll: HertzU32,
@@ -210,7 +211,7 @@ pub struct PathClocks {
 }
 
 impl PathClocks {
-    /// no-OS default RX path, 30.72 MSPS.
+    /// RX path for 30.72 MSPS.
     pub const DEFAULT_RX: Self = Self {
         bbpll: HertzU32::Hz(983_040_000),
         converter: HertzU32::Hz(245_760_000),
@@ -219,7 +220,7 @@ impl PathClocks {
         hb1: HertzU32::Hz(30_720_000),
         sample: HertzU32::Hz(30_720_000),
     };
-    /// no-OS default TX path, 30.72 MSPS.
+    /// TX path for 30.72 MSPS, DAC at half the ADC rate.
     pub const DEFAULT_TX: Self = Self {
         bbpll: HertzU32::Hz(983_040_000),
         converter: HertzU32::Hz(122_880_000),
@@ -234,9 +235,10 @@ impl PathClocks {
     }
 }
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
     /// Sets BBPLL and datapath clocks, no digital interface tuning.
     pub(super) async fn apply_trx_clock_chain(
@@ -256,8 +258,8 @@ where
             (Ad9361Clock::RxSampl, Ad9361Clock::TxSampl, rx.sample, tx.sample),
         ];
         for (rx_clk, tx_clk, rx_rate, tx_rate) in stages {
-            self.set_clock_rate(rx_clk, rx_rate)?;
-            self.set_clock_rate(tx_clk, tx_rate)?;
+            self.set_clock_rate(rx_clk, rx_rate).await?;
+            self.set_clock_rate(tx_clk, tx_rate).await?;
         }
 
         // the rates don't change when a FIR gets enabled or bypassed, so nothing would flip it
@@ -266,19 +268,19 @@ where
             let enable = !self.fir.rx_bypassed();
             self.modify_reg::<RxEnableFilterControl>(|reg| {
                 reg.with_rx_fir_enable_decimation(u2::new(enable as u8))
-            })?;
+            }).await?;
         }
         if self.fir.tx_interpolation() == 1 {
             let enable = !self.fir.tx_bypassed();
             self.modify_reg::<TxEnableFilterControl>(|reg| {
                 reg.with_tx_fir_enable_interpolation(u2::new(enable as u8))
-            })?;
+            }).await?;
         }
         Ok(())
     }
 
     /// `ad9361_set_trx_clock_chain()`.
-    pub async fn set_trx_clock_chain(
+    pub(crate) async fn set_trx_clock_chain(
         &mut self,
         rx: &PathClocks,
         tx: &PathClocks,
@@ -299,17 +301,17 @@ where
     }
 
     /// Refreshes everything that depends on the baseband rates. No retuning.
-    pub(super) fn bb_clk_update(&mut self) -> Result<(), Ad9361Error<S::Error>> {
-        self.gc_update()?;
+    pub(super) async fn bb_clk_update(&mut self) -> Result<(), Ad9361Error<S::Error>> {
+        self.gc_update().await?;
         let rssi = self.cal.rssi_ctrl;
-        self.rssi_setup(&rssi, true)?;
+        self.rssi_setup(&rssi, true).await?;
         let auxadc = self.cal.auxadc_config;
-        self.auxadc_setup(&auxadc)
+        self.auxadc_setup(&auxadc).await
     }
 
     /// `ad9361_bb_clk_change_handler()`. Call after any BBPLL or datapath clock change.
-    pub async fn bb_clk_change_handler(&mut self) -> Result<(), Ad9361Error<S::Error>> {
-        self.bb_clk_update()?;
+    pub(crate) async fn bb_clk_change_handler(&mut self) -> Result<(), Ad9361Error<S::Error>> {
+        self.bb_clk_update().await?;
         // retune so DATA_CLK timing survives sample rate switches
         if self.tune.bb_clk_change_dig_tune_en {
             let flags = DigTuneFlags {

@@ -1,7 +1,7 @@
 //! Settings of the chip.
 //!
 //! [`Ad9361Settings`] is plain data with public fields and a `Default`. [`Ad9361Config::new`]
-//! checks it, [`Uninitialized::configure`](crate::Uninitialized::configure) calls that.
+//! checks it.
 //! Settings that only apply to one mode live in the mode's enum ([`ChannelMode`], [`Duplex`]).
 
 use super::clock_chain::validate_trx_clock_chain;
@@ -29,9 +29,50 @@ impl ReferenceClock {
     }
 }
 
+/// Highest synth reference, the limit for [`Ad9361Settings::trx_synth_max_fref`].
+pub const MAX_SYNTH_FREF: HertzU32 = HertzU32::Hz(80_008_000);
+/// Lowest synth reference, the limit for [`Ad9361Settings::trx_synth_max_fref`].
+pub const MIN_SYNTH_FREF: HertzU32 = HertzU32::Hz(9_999_000);
+
+/// How the reference clock gets into the chip.
+///
+/// A crystal goes across XTALP and XTALN and runs on the chip's DCXO, which can pull it by about
+/// ±60 ppm with a [`DcxoTrim`]. An external oscillator drives XTALN on its own, and needs its own
+/// frequency correction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceSource {
+    Crystal(DcxoTrim),
+    External,
+}
+
+/// DCXO trim, pulls the crystal frequency by about ±60 ppm in total.
+///
+/// `coarse` (0..=63) steps are about 12 ppm and change the load capacitance, `fine` (0..=8191)
+/// steps are small enough to track temperature. The resolution is 0.0125 ppm or better. Higher
+/// values lower the frequency. The right values depend on the crystal on the board, so measure a
+/// known tone (or the LO) and adjust, at run time with
+/// [`Ad9361::set_dcxo_trim`](crate::Ad9361::set_dcxo_trim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DcxoTrim {
+    pub coarse: u6,
+    pub fine: u13,
+}
+
+impl DcxoTrim {
+    /// The trim the default settings use. Measure the crystal on the board and adjust from
+    /// there.
+    pub const DEFAULT: Self = Self { coarse: u6::new(8), fine: u13::new(5920) };
+}
+
+impl Default for DcxoTrim {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// 2R2T (both receivers and transmitters) or 1R1T (one of each).
 ///
-/// 2R2T is what the no-OS example runs and what was tested. In 1R1T the other channels are switched
+/// 2R2T is the default and what was tested. In 1R1T the other channels are switched
 /// off and the unused TX attenuation is set to the maximum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelMode {
@@ -105,7 +146,8 @@ pub enum DigInterfaceTune {
     RxAndTx,
     /// Tune RX only
     RxOnly,
-    /// Don't tune, use the delays from the config
+    /// Don't tune, use the delays from [`PortConfig`](crate::settings::PortConfig). For a second
+    /// chip that shares its timing with the first, for example
     UseConfigured,
 }
 
@@ -271,9 +313,8 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
 
 /// All settings of the chip.
 ///
-/// `Default` gives the values from the no-OS `main.c`: 2R2T, FDD, LVDS, 30.72 MSPS, both LOs at
-/// 2.4 GHz, 18 MHz bandwidths, the `A` differential RX inputs, slow attack AGC and 10 dB TX
-/// attenuation. The 64 tap example FIR is loaded in both directions and stays bypassed until
+/// `Default` is a crystal reference with [`DcxoTrim::DEFAULT`], 2R2T, FDD, LVDS, 30.72 MSPS, both LOs at 2.4 GHz, 18 MHz bandwidths, the `A`
+/// differential RX inputs and TX outputs, slow attack AGC and 10 dB TX attenuation. The 64 tap example FIR is loaded in both directions and stays bypassed until
 /// enabled.
 ///
 /// Change what is needed and keep the rest:
@@ -282,8 +323,8 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
 /// use ad9361::{Ad9361Settings, RxLoFrequency, TxAttenuation, TxLoFrequency};
 ///
 /// let settings = Ad9361Settings {
-///     rx_synth_freq: RxLoFrequency::from_hz(915_000_000),
-///     tx_synth_freq: TxLoFrequency::from_hz(915_000_000),
+///     rx_lo_frequency: RxLoFrequency::from_hz(915_000_000),
+///     tx_lo_frequency: TxLoFrequency::from_hz(915_000_000),
 ///     tx_attenuation: TxAttenuation::from_db(20),
 ///     ..Ad9361Settings::default()
 /// };
@@ -294,20 +335,17 @@ fn validate_ranges(settings: &Ad9361Settings) -> Result<(), ConfigError> {
 /// Numbers that go into a register field (most of [`GainControl`], for example) are range checked
 /// by [`Ad9361Config::new`]. A value that doesn't fit is an error, not silently truncated.
 ///
-/// `rx_path_clks` and `tx_path_clks` are the full clock chain, as in no-OS, and default to
+/// `rx_path_clks` and `tx_path_clks` are the full clock chain, and default to
 /// 30.72 MSPS. For another rate, keep them and call [`Ad9361::set_sample_rate`] after init, or fill
 /// them in by hand.
 pub struct Ad9361Settings {
-    pub dcxo_coarse_tune: u6,
-    pub dcxo_fine_tune: u13,
-    pub use_external_clock: bool,
+    /// Crystal with DCXO trim, or an external oscillator
+    pub reference_source: ReferenceSource,
     pub channels: ChannelMode,
     pub rx_path_clks: PathClocks,
     pub tx_path_clks: PathClocks,
-    /// RX input pins
-    pub rf_rx_input_sel: RxInput,
-    /// TX B outputs instead of A
-    pub rf_tx_output_b: bool,
+    pub rx_input: RxInput,
+    pub tx_output: TxOutput,
     pub port: PortConfig,
     pub auxadc: AuxAdcConfig,
     pub ctrl_outs: CtrlOutsConfig,
@@ -317,13 +355,12 @@ pub struct Ad9361Settings {
     /// fractional spurs.
     pub trx_synth_max_fref: HertzU32,
     pub duplex: Duplex,
-    pub rx_synth_freq: RxLoFrequency,
-    pub tx_synth_freq: TxLoFrequency,
+    pub rx_lo_frequency: RxLoFrequency,
+    pub tx_lo_frequency: TxLoFrequency,
     pub gain_ctrl: GainControl,
     pub gain_table: GainTableKind,
-    /// RF bandwidth
-    pub rf_rx_bandwidth: RfBandwidth,
-    pub rf_tx_bandwidth: RfBandwidth,
+    pub rx_bandwidth: RfBandwidth,
+    pub tx_bandwidth: RfBandwidth,
     pub dc_offset: DcOffsetConfig,
     pub tracking: TrackingConfig,
     /// ENSM on pins instead of SPI
@@ -352,26 +389,24 @@ pub struct Ad9361Settings {
 impl Default for Ad9361Settings {
     fn default() -> Self {
         Self {
-            dcxo_coarse_tune: u6::new(8),
-            dcxo_fine_tune: u13::new(5920),
-            use_external_clock: false,
+            reference_source: ReferenceSource::Crystal(DcxoTrim::DEFAULT),
             channels: ChannelMode::TwoByTwo,
             rx_path_clks: PathClocks::DEFAULT_RX,
             tx_path_clks: PathClocks::DEFAULT_TX,
-            rf_rx_input_sel: RxInput::DifferentialA,
-            rf_tx_output_b: false,
+            rx_input: RxInput::DifferentialA,
+            tx_output: TxOutput::A,
             port: PortConfig::default(),
             auxadc: AuxAdcConfig::default(),
             ctrl_outs: CtrlOutsConfig::default(),
             elna: ElnaConfig::default(),
             trx_synth_max_fref: MAX_SYNTH_FREF,
             duplex: Duplex::Fdd { independent_mode: false },
-            rx_synth_freq: RxLoFrequency::from_hz(2_400_000_000),
-            tx_synth_freq: TxLoFrequency::from_hz(2_400_000_000),
+            rx_lo_frequency: RxLoFrequency::from_hz(2_400_000_000),
+            tx_lo_frequency: TxLoFrequency::from_hz(2_400_000_000),
             gain_ctrl: GainControl::default(),
             gain_table: GainTableKind::Full,
-            rf_rx_bandwidth: RfBandwidth::new_clamped(HertzU32::Hz(18_000_000)),
-            rf_tx_bandwidth: RfBandwidth::new_clamped(HertzU32::Hz(18_000_000)),
+            rx_bandwidth: RfBandwidth::from_hz(18_000_000),
+            tx_bandwidth: RfBandwidth::from_hz(18_000_000),
             dc_offset: DcOffsetConfig::default(),
             tracking: TrackingConfig::default(),
             ensm_pin_ctrl: false,
@@ -393,9 +428,20 @@ impl Default for Ad9361Settings {
     }
 }
 
-/// Settings that passed all checks. Setup only takes this type.
+/// [`Ad9361Settings`] and the reference clock, checked against each other. The only thing
+/// [`Ad9361::init`](crate::Ad9361::init) takes, so bad settings show up here instead of half way
+/// through the setup. Nothing here needs the hardware.
 ///
-/// [`Ad9361Config::new`] checks that:
+/// ```
+/// use ad9361::{Ad9361Config, Ad9361Settings, ReferenceClock};
+/// use fugit::HertzU32;
+///
+/// let ref_clk = ReferenceClock::new(HertzU32::MHz(40)).unwrap();
+/// let config = Ad9361Config::new(Ad9361Settings::default(), ref_clk).unwrap();
+/// # let _ = config;
+/// ```
+///
+/// [`Self::new`] checks that:
 ///
 /// - the path clocks are within the chip's limits and one of them matches DATA_CLK
 /// - the reference clock can be divided into the synth reference window (`trx_synth_max_fref`)
@@ -420,7 +466,7 @@ impl Ad9361Config {
             return Err(ConfigError::EnsmPinControlInFddIndependentMode);
         }
 
-        let lvds_mode = settings.port.conf3.lvds_mode();
+        let lvds_mode = settings.port.is_lvds();
         validate_trx_clock_chain::<()>(
             &settings.rx_path_clks,
             &settings.tx_path_clks,
@@ -458,4 +504,9 @@ impl Ad9361Config {
     pub fn settings(&self) -> &Ad9361Settings {
         &self.settings
     }
+
+    pub fn reference_clock(&self) -> ReferenceClock {
+        self.ref_clk
+    }
+
 }

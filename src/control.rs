@@ -1,8 +1,11 @@
 //! ENSM, TX attenuation, CLKOUT.
 
+use embedded_hal_async::spi::SpiDevice;
+
+use super::interface::DataInterface;
 use arbitrary_int::u3;
 use embassy_time::Timer;
-use embedded_hal::spi::SpiDevice;
+
 
 use super::{
     Engine, Ad9361Error, BbPll, ClockEnable, EnsmConfig1, EnsmConfig2, EnsmMode, GainMode,
@@ -17,8 +20,9 @@ pub(crate) struct SavedEnsmState(u8);
 
 /// States the driver can put the chip in by SPI. In TDD it can't go from RX straight to TX, so
 /// it goes through `Alert` first.
+#[allow(dead_code, reason = "full set from no-OS, not all used yet")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ForcedEnsmState {
+pub(crate) enum ForcedEnsmState {
     Tx,
     Fdd,
     Rx,
@@ -41,8 +45,9 @@ impl From<ForcedEnsmState> for EnsmState {
 ///
 /// `Sleep` is the wait state with the clocks and BBPLL off. Calibration results are kept, but
 /// the RF DC offset cal is worth rerunning after waking up.
+#[allow(dead_code, reason = "full set from no-OS, not all used yet")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RequestedEnsmState {
+pub(crate) enum RequestedEnsmState {
     Sleep,
     SleepWait,
     Alert,
@@ -71,8 +76,9 @@ impl From<RequestedEnsmState> for EnsmState {
 /// between bursts. `Fdd` has RX and TX on together. In TDD, `Rx` and `Tx` are separate and the
 /// chip has to go through `Alert` to switch. `SleepWait` powers the synthesizers down but keeps
 /// the clocks running.
+#[allow(dead_code, reason = "full set from no-OS, not all used yet")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EnsmState {
+pub(crate) enum EnsmState {
     /// Same as `SleepWait` with the clocks and BBPLL off
     Sleep,
     SleepWait,
@@ -115,16 +121,17 @@ pub enum ClkoutMode {
     AdcClkDiv16 = 6,
 }
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
     /// `ad9361_set_ensm_mode()`.
-    pub fn set_ensm_mode(&mut self, fdd: bool, pinctrl: bool) -> Result<(), S::Error> {
-        self.write_reg(EnsmMode::default().with_fdd_mode(fdd))?;
+    pub(crate) async fn set_ensm_mode(&mut self, fdd: bool, pinctrl: bool) -> Result<(), S::Error> {
+        self.write_reg(EnsmMode::default().with_fdd_mode(fdd)).await?;
 
         // keep the synth power down / ready mask bits
-        let current = self.read_reg::<EnsmConfig2>()?;
+        let current = self.read_reg::<EnsmConfig2>().await?;
         let kept = EnsmConfig2::default()
             .with_power_down_rx_synth(current.power_down_rx_synth())
             .with_power_down_tx_synth(current.power_down_tx_synth())
@@ -138,11 +145,11 @@ where
             kept.with_dual_synth_mode(true)
         } else {
             kept.with_synth_enable_pin_ctrl_mode(pinctrl)
-        })
+        }).await
     }
 
     /// `ad9361_set_tx_atten()`. `immed` = apply now, don't wait for the update.
-    pub fn set_tx_atten(
+    pub(crate) async fn set_tx_atten(
         &mut self,
         atten: TxAttenuation,
         tx1: bool,
@@ -152,21 +159,21 @@ where
         // 0.25 dB per LSB, and the burst counts addresses down, so MSB goes first
         let buf = atten.quarter_db().to_be_bytes();
 
-        self.modify_reg::<Tx2DigAtten>(|reg| reg.with_immediately_update_tpc_atten(false))?;
+        self.modify_reg::<Tx2DigAtten>(|reg| reg.with_immediately_update_tpc_atten(false)).await?;
         if tx1 {
-            self.write_bytes(&buf, Tx1Atten1::ADDRESS)?;
+            self.write_bytes(&buf, Tx1Atten1::ADDRESS).await?;
         }
         if tx2 {
-            self.write_bytes(&buf, Tx2Atten1::ADDRESS)?;
+            self.write_bytes(&buf, Tx2Atten1::ADDRESS).await?;
         }
         if immed {
-            self.modify_reg::<Tx2DigAtten>(|reg| reg.with_immediately_update_tpc_atten(true))?;
+            self.modify_reg::<Tx2DigAtten>(|reg| reg.with_immediately_update_tpc_atten(true)).await?;
         }
         Ok(())
     }
 
     /// `ad9361_clkout_control()`.
-    pub fn clkout_control(&mut self, mode: ClkoutMode) -> Result<(), S::Error> {
+    pub(crate) async fn clkout_control(&mut self, mode: ClkoutMode) -> Result<(), S::Error> {
         self.modify_reg::<BbPll>(|reg| {
             if mode == ClkoutMode::Disable {
                 reg.with_clkout_enable(false)
@@ -174,32 +181,32 @@ where
                 reg.with_clkout_enable(true)
                     .with_clkout_select(u3::new(mode as u8 - 1))
             }
-        })
+        }).await
     }
 
     /// RX (`tx == false`) or TX VCO cal on/off. `ad9361_trx_vco_cal_control()`.
-    pub fn trx_vco_cal_control(&mut self, tx: bool, enable: bool) -> Result<(), S::Error> {
-        self.modify_synth_reg::<RxPfdConfig>(tx, |reg| reg.with_bypass_ld_synth(!enable))
+    pub(crate) async fn trx_vco_cal_control(&mut self, tx: bool, enable: bool) -> Result<(), S::Error> {
+        self.modify_synth_reg::<RxPfdConfig>(tx, |reg| reg.with_bypass_ld_synth(!enable)).await
     }
 
     /// Raw state from the chip.
-    pub fn ensm_state(&mut self) -> Result<u8, S::Error> {
-        Ok(self.read_reg::<State>()?.ensm_state().value())
+    pub(crate) async fn ensm_state(&mut self) -> Result<u8, S::Error> {
+        Ok(self.read_reg::<State>().await?.ensm_state().value())
     }
 
     /// `ad9361_ensm_force_state()`. Returns the old state for restoring.
-    pub async fn ensm_force_state(
+    pub(crate) async fn ensm_force_state(
         &mut self,
         state: ForcedEnsmState,
     ) -> Result<SavedEnsmState, S::Error> {
-        let device_state = self.ensm_state()?;
+        let device_state = self.ensm_state().await?;
         let saved = SavedEnsmState(device_state);
         if device_state == EnsmState::from(state).raw() {
             return Ok(saved);
         }
 
         // SPI control on, and out of alert
-        let mut config = self.read_reg::<EnsmConfig1>()?;
+        let mut config = self.read_reg::<EnsmConfig1>().await?;
         self.ensm.saved_pin_ctrl_enable = config.enable_ensm_pin_ctrl();
         config = config.with_enable_ensm_pin_ctrl(false);
         if device_state != 0 {
@@ -215,12 +222,12 @@ where
                 .with_force_alert_state(true),
         };
 
-        self.write_reg(EnsmConfig1::default().with_to_alert(true).with_force_alert_state(true))?;
-        self.write_reg(config)?;
+        self.write_reg(EnsmConfig1::default().with_to_alert(true).with_force_alert_state(true)).await?;
+        self.write_reg(config).await?;
 
         // takes a moment. Timing out is not an error, no-OS doesn't care either
         for _ in 0..10 {
-            if self.ensm_state()? == EnsmState::from(state).raw() {
+            if self.ensm_state().await? == EnsmState::from(state).raw() {
                 break;
             }
             Timer::after_millis(1).await;
@@ -229,16 +236,16 @@ where
     }
 
     /// Current state, for [`Self::ensm_restore_state`].
-    pub fn save_ensm_state(&mut self) -> Result<SavedEnsmState, S::Error> {
-        Ok(SavedEnsmState(self.ensm_state()?))
+    pub(crate) async fn save_ensm_state(&mut self) -> Result<SavedEnsmState, S::Error> {
+        Ok(SavedEnsmState(self.ensm_state().await?))
     }
 
     /// Goes back to a saved state if it's one that can be restored (`ad9361_ensm_restore_state()`).
-    pub fn ensm_restore_state(&mut self, saved: SavedEnsmState) -> Result<(), S::Error> {
+    pub(crate) async fn ensm_restore_state(&mut self, saved: SavedEnsmState) -> Result<(), S::Error> {
         let previous = saved.0;
         // clear whatever forcing set
         let mut config = self
-            .read_reg::<EnsmConfig1>()?
+            .read_reg::<EnsmConfig1>().await?
             .with_force_tx_on(false)
             .with_force_rx_on(false)
             .with_force_alert_state(false)
@@ -250,16 +257,16 @@ where
             _ => return Ok(()), // Not a state that can be restored
         }
 
-        self.write_reg(EnsmConfig1::default().with_to_alert(true).with_force_alert_state(true))?;
-        self.write_reg(config)?;
+        self.write_reg(EnsmConfig1::default().with_to_alert(true).with_force_alert_state(true)).await?;
+        self.write_reg(config).await?;
         if self.ensm.saved_pin_ctrl_enable {
-            self.write_reg(config.with_enable_ensm_pin_ctrl(true))?;
+            self.write_reg(config.with_enable_ensm_pin_ctrl(true)).await?;
         }
         Ok(())
     }
 
     /// `ad9361_ensm_set_state()`.
-    pub async fn ensm_set_state(
+    pub(crate) async fn ensm_set_state(
         &mut self,
         state: RequestedEnsmState,
         pinctrl: bool,
@@ -273,13 +280,13 @@ where
                     .with_clock_enable_dflt(true)
                     .with_bbpll_enable(true)
                     .with_xo_bypass(self.clk.use_extclk),
-            )?; // Enable clocks
+            ).await?; // Enable clocks
             Timer::after_micros(20).await;
             self.write_reg(
                 EnsmConfig1::default().with_to_alert(true).with_force_alert_state(true),
-            )?;
-            self.trx_vco_cal_control(false, true)?;
-            self.trx_vco_cal_control(true, true)?;
+            ).await?;
+            self.trx_vco_cal_control(false, true).await?;
+            self.trx_vco_cal_control(true, true).await?;
         }
 
         let mut val = EnsmConfig1::default()
@@ -313,20 +320,20 @@ where
             }
             EnsmState::SleepWait => {}
             EnsmState::Sleep => {
-                self.trx_vco_cal_control(false, false)?;
-                self.trx_vco_cal_control(true, false)?;
-                self.write_reg(EnsmConfig1::default())?; // Clear to alert
+                self.trx_vco_cal_control(false, false).await?;
+                self.trx_vco_cal_control(true, false).await?;
+                self.write_reg(EnsmConfig1::default()).await?; // Clear to alert
                 self.write_reg(if self.mode.fdd {
                     EnsmConfig1::default().with_force_tx_on(true)
                 } else {
                     EnsmConfig1::default().with_force_rx_on(true)
-                })?;
+                }).await?;
                 // flush takes 384 ADC clock cycles
                 let adc = self.clk.rates.adc.to_raw().max(1);
                 Timer::after_micros(384_000_000u64 / adc as u64).await;
-                self.write_reg(EnsmConfig1::default())?; // Move to wait
+                self.write_reg(EnsmConfig1::default()).await?; // Move to wait
                 Timer::after_micros(1).await; // Wait for the ENSM to settle
-                self.write_reg(ClockEnable::default().with_xo_bypass(self.clk.use_extclk))?; // Clocks off
+                self.write_reg(ClockEnable::default().with_xo_bypass(self.clk.use_extclk)).await?; // Clocks off
                 self.ensm.current = state.raw();
                 return Ok(());
             }
@@ -343,7 +350,7 @@ where
                     .with_force_rx_on(false)
                     .with_to_alert(true)
                     .with_force_alert_state(true);
-                self.write_reg(alert)?;
+                self.write_reg(alert).await?;
                 self.wait_until::<State>(
                     State::ADDRESS,
                     |reg| reg.ensm_state().value() == EnsmState::Alert.raw(),
@@ -361,7 +368,7 @@ where
             && matches!(state, EnsmState::Tx | EnsmState::Rx)
         {
             let tx = state == EnsmState::Tx;
-            self.modify_reg::<EnsmConfig2>(|reg| reg.with_txnrx_spi_ctrl(tx))?;
+            self.modify_reg::<EnsmConfig2>(|reg| reg.with_txnrx_spi_ctrl(tx)).await?;
             self.wait_until::<RxCpOverrangeVcoLock>(
                 Self::synth_addr::<RxCpOverrangeVcoLock>(tx),
                 |reg| reg.vco_lock(),
@@ -370,17 +377,17 @@ where
             .await?;
         }
 
-        self.write_reg(val)?;
+        self.write_reg(val).await?;
 
         let manual = |mode: GainMode| mode == GainMode::Manual;
         if val.force_rx_on() && self.gain.agc_mode.iter().any(|m| manual(*m)) {
-            let raw = self.read_reg::<SmallLmtOverloadThresh>()?.to_raw() & 0x3F;
+            let raw = self.read_reg::<SmallLmtOverloadThresh>().await?.to_raw() & 0x3F;
             let base = SmallLmtOverloadThresh::from_raw(raw);
             self.write_reg(
                 base.with_force_pd_reset_rx1(manual(self.gain.agc_mode[0]))
                     .with_force_pd_reset_rx2(manual(self.gain.agc_mode[1])),
-            )?;
-            self.write_reg(base)?;
+            ).await?;
+            self.write_reg(base).await?;
         }
 
         self.ensm.current = state.raw();

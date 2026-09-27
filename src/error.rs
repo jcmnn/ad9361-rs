@@ -2,6 +2,11 @@
 
 use core::fmt;
 
+use embedded_hal::digital::OutputPin;
+use embedded_hal_async::spi::SpiDevice;
+
+use super::interface::InterfaceError;
+
 /// Errors of a running chip. `E` is the error type of the `SpiDevice`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ad9361Error<E> {
@@ -13,8 +18,8 @@ pub enum Ad9361Error<E> {
     Timeout,
     /// Found no digital interface delay that works
     TuningFailed,
-    /// AXI core flagged errors
-    AxiStatus,
+    /// The FPGA side of the data port didn't come up
+    Interface(InterfaceError),
     /// Too many FIR taps for this sample rate
     FirTooLong,
     /// Tried to enable a FIR that has no coefficients
@@ -44,7 +49,7 @@ impl<E: fmt::Debug> fmt::Display for Ad9361Error<E> {
             Ad9361Error::InvalidRate => f.write_str("the clock rate can't be produced"),
             Ad9361Error::Timeout => f.write_str("a calibration or lock timed out"),
             Ad9361Error::TuningFailed => f.write_str("no working digital interface delay found"),
-            Ad9361Error::AxiStatus => f.write_str("an AXI core reported status errors"),
+            Ad9361Error::Interface(e) => write!(f, "{e}"),
             Ad9361Error::FirTooLong => f.write_str("the FIR filter has too many taps"),
             Ad9361Error::FirNotLoaded => f.write_str("no FIR filter is loaded"),
             Ad9361Error::UnsupportedGainTable => {
@@ -66,7 +71,7 @@ impl<E: fmt::Debug> fmt::Display for Ad9361Error<E> {
 
 impl<E: fmt::Debug> core::error::Error for Ad9361Error<E> {}
 
-/// Errors of [`Configured::init`](crate::Configured::init). `E` is the error type of the
+/// Errors of [`Ad9361::init`](crate::Ad9361::init), inside an [`InitFailure`]. `E` is the error type of the
 /// `SpiDevice`, `P` the one of the reset pin.
 ///
 /// A wrong product ID usually means the SPI setup is wrong (mode, clock, wiring).
@@ -99,3 +104,39 @@ impl<E: fmt::Debug, P: fmt::Debug> fmt::Display for InitError<E, P> {
 }
 
 impl<E: fmt::Debug, P: fmt::Debug> core::error::Error for InitError<E, P> {}
+
+/// A failed [`Ad9361::init`](crate::Ad9361::init): the error, plus the peripherals `init` took,
+/// to retry with.
+pub struct InitFailure<S: SpiDevice<u8>, R: OutputPin, I> {
+    pub error: InitError<S::Error, R::Error>,
+    pub spi: S,
+    pub resetb: R,
+    pub interface: I,
+}
+
+impl<S: SpiDevice<u8>, R: OutputPin, I> fmt::Debug for InitFailure<S, R, I>
+where
+    S::Error: fmt::Debug,
+    R::Error: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InitFailure").field("error", &self.error).finish_non_exhaustive()
+    }
+}
+
+impl<S: SpiDevice<u8>, R: OutputPin, I> fmt::Display for InitFailure<S, R, I>
+where
+    S::Error: fmt::Debug,
+    R::Error: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+impl<S: SpiDevice<u8>, R: OutputPin, I> core::error::Error for InitFailure<S, R, I>
+where
+    S::Error: fmt::Debug,
+    R::Error: fmt::Debug,
+{
+}

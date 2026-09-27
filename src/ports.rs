@@ -4,7 +4,7 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Dac {
+pub(crate) enum Dac {
     Dac1,
     Dac2,
 }
@@ -22,7 +22,7 @@ impl Dac {
 /// AuxADC and temperature sensor settings.
 ///
 /// The defaults leave the temperature sensor measuring once a second. `offset` is the sensor
-/// calibration value (default 0xCE as in no-OS).
+/// calibration value (default 0xCE).
 #[derive(Clone, Copy, Debug)]
 pub struct AuxAdcConfig {
     /// signed
@@ -36,7 +36,6 @@ pub struct AuxAdcConfig {
 }
 
 impl Default for AuxAdcConfig {
-    /// no-OS defaults
     fn default() -> Self {
         Self {
             offset: 0xCEu8 as i8,
@@ -107,63 +106,280 @@ pub enum Channel {
     Ch2 = 1,
 }
 
-/// Parallel data port settings (the LVDS or CMOS interface to the FPGA). The default is the
-/// no-OS LVDS setup with 150 mV bias and on-chip RX termination.
+/// One channel or both, for settings that can go to either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Channels {
+    Ch1,
+    Ch2,
+    Both,
+}
+
+impl Channels {
+    /// Bit 0 for channel 1, bit 1 for channel 2, how the chip's select fields want it.
+    pub(crate) const fn mask(self) -> u8 {
+        match self {
+            Channels::Ch1 => 0b01,
+            Channels::Ch2 => 0b10,
+            Channels::Both => 0b11,
+        }
+    }
+
+    pub(crate) const fn contains(self, channel: Channel) -> bool {
+        self.mask() & (1 << channel as u8) != 0
+    }
+}
+
+impl From<Channel> for Channels {
+    fn from(channel: Channel) -> Self {
+        match channel {
+            Channel::Ch1 => Channels::Ch1,
+            Channel::Ch2 => Channels::Ch2,
+        }
+    }
+}
+
+/// Parallel data port settings, the LVDS or CMOS interface to the FPGA. Has to match the FPGA
+/// design. The default is LVDS with 150 mV bias and on-chip RX termination, I and Q swapped in
+/// both directions and a pulsed RX frame.
 ///
-/// Changing this has to match the FPGA design. `conf3` is fixed up before it is written, since
-/// the chip can't do LVDS with half duplex, single data rate or single port.
+/// The delays are where the port starts. With
+/// [`DigInterfaceTune`](crate::settings::DigInterfaceTune) other than `UseConfigured`, the
+/// driver tunes them during init.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PortConfig {
-    pub conf1: ParallelPortConf1,
-    pub conf2: ParallelPortConf2,
-    pub conf3: ParallelPortConf3,
-    pub rx_clk_data_delay: RxClockDataDelay,
-    pub tx_clk_data_delay: TxClockDataDelay,
-    pub lvds_bias: LvdsBiasControl,
-    pub lvds_invert1: u8,
-    pub lvds_invert2: u8,
-    pub rx1rx2_phase_inversion: bool,
+    /// LVDS or CMOS, with the settings that only apply to that one
+    pub mode: PortMode,
+    pub rx_delays: PortDelays,
+    pub tx_delays: PortDelays,
+    /// Swap I and Q on the RX data
+    pub rx_swap_iq: bool,
+    /// Swap I and Q on the TX data
+    pub tx_swap_iq: bool,
+    /// Swap RX1 and RX2 on the port
+    pub rx_swap_channels: bool,
+    /// Swap TX1 and TX2 on the port
+    pub tx_swap_channels: bool,
+    /// RX_FRAME is a pulse at the start of each burst, otherwise a 50% duty cycle clock
+    pub rx_frame_pulse_mode: bool,
+    /// 1R1T uses the 2R2T data timing, with the second channel's slots unused
+    pub two_by_two_timing: bool,
+    /// In FDD, RX runs at twice the TX rate
+    pub fdd_rx_rate_2x_tx_rate: bool,
+    /// Alternate RX and TX words in FDD
+    pub fdd_alt_word_order: bool,
+    /// Inverts the data bus bits
+    pub invert_data_bus: bool,
+    /// Inverts DATA_CLK
+    pub invert_data_clk: bool,
+    /// Inverts RX_FRAME
+    pub invert_rx_frame: bool,
+    /// Inverts the sign of each channel's data. Inverting RX2 lines its phase up with RX1 on
+    /// boards where the RX2 input is wired the other way round
+    pub invert: ChannelInversion,
+    /// Extra RX data delay, in DATA_CLK cycles
+    pub rx_data_extra_delay: u2,
+    /// CLK_OUT slew rate, 0 is the fastest
+    pub clk_out_slew: u2,
+}
+
+/// Which channels have their data sign inverted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChannelInversion {
+    pub rx1: bool,
+    pub rx2: bool,
+    pub tx1: bool,
+    pub tx2: bool,
+}
+
+/// LVDS or CMOS data port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortMode {
+    /// Always dual port, full duplex, double data rate
+    Lvds(LvdsConfig),
+    Cmos(CmosConfig),
+}
+
+/// LVDS electrical settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LvdsConfig {
+    pub bias: LvdsBias,
+    /// 100 ohm termination on the RX side of the chip (TX data from the FPGA)
+    pub rx_on_chip_termination: bool,
+    /// Bypass the bias resistor
+    pub bypass_bias_resistor: bool,
+    /// Lower common mode voltage on the LVDS outputs
+    pub low_common_mode: bool,
+    /// Swaps P and N of single LVDS pairs to match the board routing. The bits of LVDS Invert
+    /// Control 1 and 2 (0x03D, 0x03E) in the register map
+    pub pair_inversion: [u8; 2],
+}
+
+impl Default for LvdsConfig {
+    fn default() -> Self {
+        Self {
+            bias: LvdsBias::MV_150,
+            rx_on_chip_termination: true,
+            bypass_bias_resistor: false,
+            low_common_mode: false,
+            pair_inversion: [0xFF, 0x0F],
+        }
+    }
+}
+
+/// LVDS output swing, 75 to 450 mV in 75 mV steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LvdsBias(u3);
+
+impl LvdsBias {
+    pub const MV_150: Self = Self(u3::new(1));
+
+    /// Rounded down to a 75 mV step.
+    pub const fn from_mv(mv: u16) -> Result<Self, OutOfRange> {
+        if mv < 75 || mv > 450 {
+            return Err(OutOfRange);
+        }
+        Ok(Self(u3::new((mv / 75 - 1) as u8)))
+    }
+
+    pub const fn mv(self) -> u16 {
+        (self.0.value() as u16 + 1) * 75
+    }
+}
+
+/// CMOS port layout and timing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CmosConfig {
+    pub ports: CmosPorts,
+    /// One word per DATA_CLK cycle instead of two
+    pub single_data_rate: bool,
+    /// Swap P0 and P1
+    pub swap_ports: bool,
+    /// Swap the bits in full duplex
+    pub full_duplex_swap_bits: bool,
+}
+
+/// How the two 12 bit CMOS ports are used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmosPorts {
+    /// One port, RX and TX take turns
+    SinglePortHalfDuplex,
+    /// One port, RX and TX interleaved
+    SinglePortFullDuplex,
+    /// Both ports, RX and TX take turns
+    DualPortHalfDuplex,
+    /// Both ports, RX and TX interleaved
+    DualPortFullDuplex,
+    /// P0 for RX, P1 for TX
+    FullPort,
+}
+
+/// Clock and data delay of one direction of the port, 0..=15 steps each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PortDelays {
+    /// DATA_CLK delay for RX, FB_CLK delay for TX
+    pub clock: u4,
+    pub data: u4,
 }
 
 impl PortConfig {
-    /// conf 3 with the combos the chip can't do fixed up
-    pub(super) fn sanitized_conf3(&self) -> ParallelPortConf3 {
-        let mut conf3 = self.conf3;
-        if conf3.lvds_mode() {
-            conf3 = conf3
-                .with_half_duplex_mode(false)
-                .with_single_data_rate(false)
-                .with_single_port_mode(false);
+    pub(crate) fn is_lvds(&self) -> bool {
+        matches!(self.mode, PortMode::Lvds(_))
+    }
+
+    pub(crate) fn conf1(&self) -> ParallelPortConf1 {
+        ParallelPortConf1::default()
+            .with_pp_tx_swap_iq(self.tx_swap_iq)
+            .with_pp_rx_swap_iq(self.rx_swap_iq)
+            .with_tx_channel_swap(self.tx_swap_channels)
+            .with_rx_channel_swap(self.rx_swap_channels)
+            .with_rx_frame_pulse_mode(self.rx_frame_pulse_mode)
+            .with_r2t2_timing(self.two_by_two_timing)
+            .with_invert_data_bus(self.invert_data_bus)
+            .with_invert_data_clk(self.invert_data_clk)
+    }
+
+    pub(crate) fn conf2(&self) -> ParallelPortConf2 {
+        ParallelPortConf2::default()
+            .with_fdd_alt_word_order(self.fdd_alt_word_order)
+            .with_invert_rx1(self.invert.rx1)
+            .with_invert_rx2(self.invert.rx2)
+            .with_invert_tx1(self.invert.tx1)
+            .with_invert_tx2(self.invert.tx2)
+            .with_invert_rx_frame(self.invert_rx_frame)
+            .with_delay_rx_data(self.rx_data_extra_delay)
+    }
+
+    pub(crate) fn conf3(&self) -> ParallelPortConf3 {
+        let conf3 = ParallelPortConf3::default().with_fdd_rx_rate_2tx_rate(self.fdd_rx_rate_2x_tx_rate);
+        match self.mode {
+            PortMode::Lvds(_) => conf3.with_lvds_mode(true),
+            PortMode::Cmos(cmos) => {
+                let (single_port, half_duplex, full_port) = match cmos.ports {
+                    CmosPorts::SinglePortHalfDuplex => (true, true, false),
+                    CmosPorts::SinglePortFullDuplex => (true, false, false),
+                    CmosPorts::DualPortHalfDuplex => (false, true, false),
+                    CmosPorts::DualPortFullDuplex => (false, false, false),
+                    CmosPorts::FullPort => (false, false, true),
+                };
+                conf3
+                    .with_single_port_mode(single_port)
+                    .with_half_duplex_mode(half_duplex)
+                    .with_full_port(full_port)
+                    .with_single_data_rate(cmos.single_data_rate)
+                    .with_swap_ports(cmos.swap_ports)
+                    .with_full_duplex_swap_bits(cmos.full_duplex_swap_bits)
+            }
         }
-        if conf3.full_port() {
-            conf3 = conf3.with_half_duplex_mode(false).with_single_port_mode(false);
+    }
+
+    pub(crate) fn rx_clock_data_delay(&self) -> RxClockDataDelay {
+        RxClockDataDelay::default()
+            .with_data_clk_delay(self.rx_delays.clock)
+            .with_rx_data_delay(self.rx_delays.data)
+    }
+
+    pub(crate) fn tx_clock_data_delay(&self) -> TxClockDataDelay {
+        TxClockDataDelay::default()
+            .with_fb_clk_delay(self.tx_delays.clock)
+            .with_tx_data_delay(self.tx_delays.data)
+    }
+
+    /// LVDS bias and CLK_OUT slew, and the pair inversion masks.
+    pub(crate) fn lvds_registers(&self) -> (LvdsBiasControl, [u8; 2]) {
+        let bias = LvdsBiasControl::default().with_clk_out_slew(self.clk_out_slew);
+        match self.mode {
+            PortMode::Lvds(lvds) => (
+                bias.with_lvds_bias(lvds.bias.0)
+                    .with_rx_on_chip_term(lvds.rx_on_chip_termination)
+                    .with_lvds_bypass_bias_r(lvds.bypass_bias_resistor)
+                    .with_lvds_tx_lo_vcm(lvds.low_common_mode),
+                lvds.pair_inversion,
+            ),
+            PortMode::Cmos(_) => (bias, [0, 0]),
         }
-        conf3
     }
 }
 
 impl Default for PortConfig {
-    /// no-OS default: LVDS, 150 mV bias, on-chip RX termination
     fn default() -> Self {
         Self {
-            conf1: ParallelPortConf1::default()
-                .with_pp_tx_swap_iq(true)
-                .with_pp_rx_swap_iq(true)
-                .with_rx_frame_pulse_mode(true),
-            conf2: ParallelPortConf2::default(),
-            conf3: ParallelPortConf3::default().with_lvds_mode(true),
-            rx_clk_data_delay: RxClockDataDelay::default()
-                .with_data_clk_delay(u4::new(0))
-                .with_rx_data_delay(u4::new(4)),
-            tx_clk_data_delay: TxClockDataDelay::default()
-                .with_fb_clk_delay(u4::new(7))
-                .with_tx_data_delay(u4::new(0)),
-            // (150 mV - 75 mV) / 75 mV = 1
-            lvds_bias: LvdsBiasControl::default()
-                .with_lvds_bias(u3::new(1))
-                .with_rx_on_chip_term(true),
-            lvds_invert1: 0xFF,
-            lvds_invert2: 0x0F,
-            rx1rx2_phase_inversion: false,
+            mode: PortMode::Lvds(LvdsConfig::default()),
+            rx_delays: PortDelays { clock: u4::new(0), data: u4::new(4) },
+            tx_delays: PortDelays { clock: u4::new(7), data: u4::new(0) },
+            rx_swap_iq: true,
+            tx_swap_iq: true,
+            rx_swap_channels: false,
+            tx_swap_channels: false,
+            rx_frame_pulse_mode: true,
+            two_by_two_timing: false,
+            fdd_rx_rate_2x_tx_rate: false,
+            fdd_alt_word_order: false,
+            invert_data_bus: false,
+            invert_data_clk: false,
+            invert_rx_frame: false,
+            invert: ChannelInversion::default(),
+            rx_data_extra_delay: u2::new(0),
+            clk_out_slew: u2::new(0),
         }
     }
 }
@@ -199,14 +415,13 @@ pub struct GpoConfig {
     pub gpo3_tx_delay_us: u8,
 }
 
-/// The two auxiliary DACs. Values are in mV. Each DAC can be set by hand, or switched on for
-/// RX, TX or ALERT with a delay after the state change. The default has both at 0 mV in manual
-/// mode.
+/// The two auxiliary DACs. Each DAC can be set by hand, or switched on for RX, TX or ALERT with a
+/// delay after the state change. The default has both at 0 mV in manual mode.
 pub struct AuxDacConfig {
-    /// Default value for DAC 1 (mV)
-    pub dac1_default_value: u16,
-    /// Default value for DAC 2 (mV)
-    pub dac2_default_value: u16,
+    /// DAC 1 output in mV
+    pub dac1_default_mv: u16,
+    /// DAC 2 output in mV
+    pub dac2_default_mv: u16,
     /// Enable DAC2 TX Auto Bar
     pub dac2_in_tx_en: bool,
     /// Enable DAC1 TX Auto Bar
@@ -225,11 +440,10 @@ pub struct AuxDacConfig {
 }
 
 impl Default for AuxDacConfig {
-    /// no-OS defaults: both DACs 0 mV, manual mode
     fn default() -> Self {
         Self {
-            dac1_default_value: 0,
-            dac2_default_value: 0,
+            dac1_default_mv: 0,
+            dac2_default_mv: 0,
             dac2_in_tx_en: false,
             dac1_in_tx_en: false,
             dac2_in_rx_en: false,
@@ -245,19 +459,20 @@ impl Default for AuxDacConfig {
     }
 }
 
-impl<S> Engine<S>
+impl<S, I> Engine<S, I>
 where
     S: SpiDevice<u8>,
+    I: DataInterface,
 {
     /// Sets an AuxDAC in mV.
-    pub fn auxdac_set(&mut self, dac: Dac, val_mv: u16) -> Result<(), S::Error> {
+    pub(crate) async fn auxdac_set(&mut self, dac: Dac, val_mv: u16) -> Result<(), S::Error> {
         // the manual bar bits are active low, set = DAC off
         let disable = val_mv == 0;
         self.modify_reg::<AuxDacEnableControl>(|reg| {
             let bit = 1u8 << dac.index();
             let bars = (reg.auxdac_manual_bar().value() & !bit) | if disable { bit } else { 0 };
             reg.with_auxdac_manual_bar(u2::new(bars))
-        })?;
+        }).await?;
 
         let val_mv = val_mv.max(306);
 
@@ -277,29 +492,29 @@ where
         let lsb = u2::extract_u16(val, 0);
         match dac {
             Dac::Dac1 => {
-                self.write_reg(AuxDac1Word(msb))?;
+                self.write_reg(AuxDac1Word(msb)).await?;
                 self.write_reg(
                     AuxDac1Config::default()
                         .with_auxdac_1_word_lsb(lsb)
                         .with_auxdac_1_vref(vref),
-                )?;
+                ).await?;
             }
             Dac::Dac2 => {
-                self.write_reg(AuxDac2Word(msb))?;
+                self.write_reg(AuxDac2Word(msb)).await?;
                 self.write_reg(
                     AuxDac2Config::default()
                         .with_auxdac_2_word_lsb(lsb)
                         .with_auxdac_2_vref(vref),
-                )?;
+                ).await?;
             }
         }
 
         Ok(())
     }
 
-    pub fn auxdac_setup(&mut self, config: &AuxDacConfig) -> Result<(), S::Error> {
-        self.auxdac_set(Dac::Dac1, config.dac1_default_value)?;
-        self.auxdac_set(Dac::Dac2, config.dac2_default_value)?;
+    pub(crate) async fn auxdac_setup(&mut self, config: &AuxDacConfig) -> Result<(), S::Error> {
+        self.auxdac_set(Dac::Dac1, config.dac1_default_mv).await?;
+        self.auxdac_set(Dac::Dac2, config.dac2_default_mv).await?;
 
         // bar bits again, active low. DAC1 is bit 0
         let bars = |dac1: bool, dac2: bool| u2::new(!(dac1 as u8 | (dac2 as u8) << 1) & 0b11);
@@ -307,21 +522,21 @@ where
             reg.with_auxdac_auto_tx_bar(bars(config.dac1_in_tx_en, config.dac2_in_tx_en))
                 .with_auxdac_auto_rx_bar(bars(config.dac1_in_rx_en, config.dac2_in_rx_en))
                 .with_auxdac_init_bar(bars(config.dac1_in_alert_en, config.dac2_in_alert_en))
-        })?;
+        }).await?;
 
         self.modify_reg::<ExternalLnaControl>(|reg| {
             reg.with_auxdac_manual_select(config.auxdac_manual_mode_en)
-        })?;
+        }).await?;
 
-        self.write_reg(AuxDac1RxDelay(config.dac1_rx_delay_us))?;
-        self.write_reg(AuxDac1TxDelay(config.dac1_tx_delay_us))?;
-        self.write_reg(AuxDac2RxDelay(config.dac2_rx_delay_us))?;
-        self.write_reg(AuxDac2TxDelay(config.dac2_tx_delay_us))?;
+        self.write_reg(AuxDac1RxDelay(config.dac1_rx_delay_us)).await?;
+        self.write_reg(AuxDac1TxDelay(config.dac1_tx_delay_us)).await?;
+        self.write_reg(AuxDac2RxDelay(config.dac2_rx_delay_us)).await?;
+        self.write_reg(AuxDac2TxDelay(config.dac2_tx_delay_us)).await?;
 
         Ok(())
     }
 
-    pub fn gpo_setup(&mut self, config: &GpoConfig) -> Result<(), S::Error> {
+    pub(crate) async fn gpo_setup(&mut self, config: &GpoConfig) -> Result<(), S::Error> {
         self.write_reg(
             AutoGpo::default()
                 .with_gpo_enable_auto_rx(u4::from_u8(
@@ -336,7 +551,7 @@ where
                         | ((config.gpo1_slave_tx_en as u8) << 1)
                         | (config.gpo0_slave_tx_en as u8),
                 )),
-        )?;
+        ).await?;
 
         self.write_reg(
             GpoForceAndInit::default()
@@ -347,85 +562,82 @@ where
                         | ((config.gpo1_inactive_state_high_en as u8) << 1)
                         | (config.gpo0_inactive_state_high_en as u8),
                 )),
-        )?;
+        ).await?;
 
-        self.write_reg(Gpo0RxDelay(config.gpo0_rx_delay_us))?;
-        self.write_reg(Gpo0TxDelay(config.gpo0_tx_delay_us))?;
-        self.write_reg(Gpo1RxDelay(config.gpo1_rx_delay_us))?;
-        self.write_reg(Gpo1TxDelay(config.gpo1_tx_delay_us))?;
-        self.write_reg(Gpo2RxDelay(config.gpo2_rx_delay_us))?;
-        self.write_reg(Gpo2TxDelay(config.gpo2_tx_delay_us))?;
-        self.write_reg(Gpo3RxDelay(config.gpo3_rx_delay_us))?;
-        self.write_reg(Gpo3TxDelay(config.gpo3_tx_delay_us))?;
+        self.write_reg(Gpo0RxDelay(config.gpo0_rx_delay_us)).await?;
+        self.write_reg(Gpo0TxDelay(config.gpo0_tx_delay_us)).await?;
+        self.write_reg(Gpo1RxDelay(config.gpo1_rx_delay_us)).await?;
+        self.write_reg(Gpo1TxDelay(config.gpo1_tx_delay_us)).await?;
+        self.write_reg(Gpo2RxDelay(config.gpo2_rx_delay_us)).await?;
+        self.write_reg(Gpo2TxDelay(config.gpo2_tx_delay_us)).await?;
+        self.write_reg(Gpo3RxDelay(config.gpo3_rx_delay_us)).await?;
+        self.write_reg(Gpo3TxDelay(config.gpo3_tx_delay_us)).await?;
 
         // from ad9361.c: GPO manual mode clashes with ENSM slave and eLNA auto mode
         self.modify_reg::<ExternalLnaControl>(|reg| {
             reg.with_gpo_manual_select(config.gpo_manual_mode_en)
-        })?;
+        }).await?;
 
         Ok(())
     }
 
     /// `ad9361_en_dis_tx()`.
-    pub fn set_tx_channels(&mut self, tx1: bool, tx2: bool) -> Result<(), S::Error> {
+    pub(crate) async fn set_tx_channels(&mut self, tx1: bool, tx2: bool) -> Result<(), S::Error> {
         let field = (tx1 as u8) | ((tx2 as u8) << 1);
         self.modify_reg::<TxEnableFilterControl>(|reg| {
             reg.with_tx_channel_enable(u2::new(field))
-        })
+        }).await
     }
 
     /// `ad9361_en_dis_rx()`.
-    pub fn set_rx_channels(&mut self, rx1: bool, rx2: bool) -> Result<(), S::Error> {
+    pub(crate) async fn set_rx_channels(&mut self, rx1: bool, rx2: bool) -> Result<(), S::Error> {
         let field = (rx1 as u8) | ((rx2 as u8) << 1);
         self.modify_reg::<RxEnableFilterControl>(|reg| {
             reg.with_rx_channel_enable(u2::new(field))
-        })
+        }).await
     }
 
     /// `ad9361_rf_port_setup()` with `is_out = true`. The TX monitor inputs from the C driver
     /// aren't supported.
-    pub fn rf_port_setup(
+    pub(crate) async fn rf_port_setup(
         &mut self,
         rx_input: RxInput,
-        tx_output_b: bool,
+        tx_output: TxOutput,
     ) -> Result<(), S::Error> {
         self.write_reg(
             InputSelect::default()
                 .with_rx_input(u6::new(rx_input.select_bits()))
-                .with_tx_output(tx_output_b),
-        )
+                .with_tx_output(tx_output == TxOutput::B),
+        ).await
     }
 
     /// `ad9361_pp_port_setup()` with `restore_c3 = false`.
-    pub fn pp_port_setup(&mut self, port: &PortConfig) -> Result<(), S::Error> {
-        // already corrected in the state
-        let conf3 = self.mode.pp_conf3;
+    pub(crate) async fn pp_port_setup(&mut self, port: &PortConfig) -> Result<(), S::Error> {
+        let (lvds_bias, [invert1, invert2]) = port.lvds_registers();
+        self.write_reg(port.conf1()).await?;
+        self.write_reg(port.conf2()).await?;
+        self.write_reg(self.mode.pp_conf3).await?;
+        self.write_reg(port.rx_clock_data_delay()).await?;
+        self.write_reg(port.tx_clock_data_delay()).await?;
+        self.write_reg(lvds_bias).await?;
+        self.write_reg(LvdsInvertCtrl1(invert1)).await?;
+        self.write_reg(LvdsInvertCtrl2(invert2)).await?;
 
-        self.write_reg(port.conf1)?;
-        self.write_reg(port.conf2)?;
-        self.write_reg(conf3)?;
-        self.write_reg(port.rx_clk_data_delay)?;
-        self.write_reg(port.tx_clk_data_delay)?;
-        self.write_reg(port.lvds_bias)?;
-        self.write_reg(LvdsInvertCtrl1(port.lvds_invert1))?;
-        self.write_reg(LvdsInvertCtrl2(port.lvds_invert2))?;
-
-        if port.rx1rx2_phase_inversion || port.conf2.invert_rx2() {
-            self.modify_reg::<ParallelPortConf2>(|reg| reg.with_invert_rx2(true))?;
-            self.modify_reg::<InvertBits>(|reg| reg.with_invert_rx2_rf_dc_cgout_word(false))?;
+        if port.invert.rx2 {
+            self.modify_reg::<InvertBits>(|reg| reg.with_invert_rx2_rf_dc_cgout_word(false)).await?;
         }
 
         Ok(())
     }
 
     /// `ad9361_pp_port_setup()` with `restore_c3 = true`.
-    pub fn pp_port_restore_conf3(&mut self) -> Result<(), S::Error> {
-        self.write_reg(self.mode.pp_conf3)
+    pub(crate) async fn pp_port_restore_conf3(&mut self) -> Result<(), S::Error> {
+        self.write_reg(self.mode.pp_conf3).await
     }
 
     /// `ad9361_auxadc_setup()`, off the cached BBPLL rate. `InvalidRate` if that can't be
     /// divided down to the AuxADC clock. The config already checks the initial rate.
-    pub fn auxadc_setup(&mut self, config: &AuxAdcConfig) -> Result<(), Ad9361Error<S::Error>> {
+    pub(crate) async fn auxadc_setup(&mut self, config: &AuxAdcConfig) -> Result<(), Ad9361Error<S::Error>> {
         let bbpll = self.clk.rates.bbpll.to_raw();
         let temp_decimation = config.temp_sensor_decimation.field();
         let aux_decimation = config.auxadc_decimation.field();
@@ -439,45 +651,45 @@ where
             + (1 << 28))
             >> 29;
 
-        self.write_reg(TempOffset(config.offset as u8))?;
-        self.write_reg(StartTempReading::default())?;
+        self.write_reg(TempOffset(config.offset as u8)).await?;
+        self.write_reg(StartTempReading::default()).await?;
         self.write_reg(
             TempSense2::default()
                 .with_measurement_time_interval(u7::new((interval & 0x7F) as u8))
                 .with_temp_sense_periodic_enable(config.periodic_temp_measurement),
-        )?;
-        self.write_reg(TempSensorConfig::default().with_temp_sensor_decimation(temp_decimation))?;
+        ).await?;
+        self.write_reg(TempSensorConfig::default().with_temp_sensor_decimation(temp_decimation)).await?;
         self.write_reg(
             AuxadcClockDivider::default().with_auxadc_clock_divider(u6::new(clock_divider)),
-        )?;
-        self.write_reg(AuxadcConfig::default().with_aux_adc_decimation(aux_decimation))?;
+        ).await?;
+        self.write_reg(AuxadcConfig::default().with_aux_adc_decimation(aux_decimation)).await?;
         Ok(())
     }
 
     /// `ad9361_ctrl_outs_setup()`.
-    pub fn ctrl_outs_setup(&mut self, config: &CtrlOutsConfig) -> Result<(), S::Error> {
-        self.write_reg(ControlOutputPointer(config.index))?;
-        self.write_reg(ControlOutputEnable::from_raw(config.en_mask))
+    pub(crate) async fn ctrl_outs_setup(&mut self, config: &CtrlOutsConfig) -> Result<(), S::Error> {
+        self.write_reg(ControlOutputPointer(config.index)).await?;
+        self.write_reg(ControlOutputEnable::from_raw(config.en_mask)).await
     }
 
     /// `ad9361_set_ref_clk_cycles()`.
-    pub fn set_ref_clk_cycles(&mut self, ref_clk: ReferenceClock) -> Result<(), S::Error> {
+    pub(crate) async fn set_ref_clk_cycles(&mut self, ref_clk: ReferenceClock) -> Result<(), S::Error> {
         // 1-128 MHz, ReferenceClock guarantees it
         let mhz = ref_clk.get().to_raw() / 1_000_000;
         self.write_reg(
             ReferenceClockCycles::default()
                 .with_reference_clock_cycles_per_us(u7::new((mhz - 1) as u8)),
-        )
+        ).await
     }
 
     /// `ad9361_setup_ext_lna()`.
-    pub fn setup_ext_lna(&mut self, config: &ElnaConfig) -> Result<(), S::Error> {
+    pub(crate) async fn setup_ext_lna(&mut self, config: &ElnaConfig) -> Result<(), S::Error> {
         self.modify_reg::<ExternalLnaControl>(|reg| {
             reg.with_external_lna1_ctrl(config.elna_1_control_en)
                 .with_external_lna2_ctrl(config.elna_2_control_en)
-        })?;
-        self.write_reg(ExtLnaHighGain::default().with_ext_lna_high_gain(config.gain.field()))?;
-        self.write_reg(ExtLnaLowGain::default().with_ext_lna_low_gain(config.bypass_loss.field()))?;
+        }).await?;
+        self.write_reg(ExtLnaHighGain::default().with_ext_lna_high_gain(config.gain.field())).await?;
+        self.write_reg(ExtLnaLowGain::default().with_ext_lna_low_gain(config.bypass_loss.field())).await?;
         Ok(())
     }
 }

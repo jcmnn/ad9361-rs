@@ -94,12 +94,27 @@ impl RfBandwidth {
         }
     }
 
+    /// In Hz. Out of range in a `const` is a compile error.
+    pub const fn from_hz(hz: u32) -> Self {
+        match Self::new(HertzU32::Hz(hz)) {
+            Ok(bandwidth) => bandwidth,
+            Err(_) => panic!("RF bandwidth out of range, has to be 200 kHz to 56 MHz"),
+        }
+    }
+
     pub const fn get(self) -> HertzU32 {
         self.0
     }
 }
 
-/// Baseband sample rate, up to 61.44 MSPS.
+/// Baseband sample rate, up to 61.44 MSPS. The same rate is used for RX and TX.
+///
+/// ```
+/// use ad9361::SampleRate;
+///
+/// const LTE_20MHZ: SampleRate = SampleRate::from_hz(30_720_000);
+/// # let _ = LTE_20MHZ;
+/// ```
 ///
 /// Only checks the range. [`Ad9361::set_sample_rate`](crate::Ad9361::set_sample_rate) can still
 /// fail with [`Ad9361Error::InvalidRate`](crate::Ad9361Error::InvalidRate) when the dividers can't
@@ -115,6 +130,14 @@ impl SampleRate {
             Ok(Self(rate))
         } else {
             Err(OutOfRange)
+        }
+    }
+
+    /// In Hz. Out of range in a `const` is a compile error.
+    pub const fn from_hz(hz: u32) -> Self {
+        match Self::new(HertzU32::Hz(hz)) {
+            Ok(rate) => rate,
+            Err(_) => panic!("sample rate out of range, has to be up to 61.44 MHz"),
         }
     }
 
@@ -206,6 +229,15 @@ impl RxInput {
             RxInput::SingleEndedCP => 0b100000,
         }
     }
+}
+
+/// TX output pins, used by TX1 and TX2 together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOutput {
+    /// TX1A and TX2A
+    A,
+    /// TX1B and TX2B
+    B,
 }
 
 /// AuxADC / temperature sensor decimation, 256 to 32768. The register holds

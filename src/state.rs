@@ -21,7 +21,7 @@ pub(crate) struct ModeState {
     pub rx1tx1_use_rx: Channel,
     /// TX channel in 1R1T
     pub rx1tx1_use_tx: Channel,
-    /// Parallel port conf 3, with the combos the chip can't do already fixed up
+    /// Parallel port conf 3, from the settings
     pub pp_conf3: ParallelPortConf3,
     /// TX monitor in TDD
     pub txmon_tdd_en: bool,
@@ -33,13 +33,13 @@ impl ModeState {
         Self {
             rx2tx2: settings.channels.is_two_by_two(),
             fdd: settings.duplex.is_fdd(),
-            lvds_mode: settings.port.sanitized_conf3().lvds_mode(),
+            lvds_mode: settings.port.is_lvds(),
             tdd_skip_vco_cal: settings.duplex.tdd_skip_vco_cal(),
             fdd_independent_mode: settings.duplex.fdd_independent_mode(),
             tdd_use_dual_synth: settings.duplex.tdd_dual_synth(),
             rx1tx1_use_rx: settings.channels.one_by_one_rx(),
             rx1tx1_use_tx: settings.channels.one_by_one_tx(),
-            pp_conf3: settings.port.sanitized_conf3(),
+            pp_conf3: settings.port.conf3(),
             txmon_tdd_en: false,
         }
     }
@@ -70,7 +70,7 @@ impl ClockState {
             rx_path_clks: settings.rx_path_clks,
             tx_path_clks: settings.tx_path_clks,
             rate_governor: settings.rate_governor as u32,
-            use_extclk: settings.use_external_clock,
+            use_extclk: settings.reference_source == ReferenceSource::External,
             current_rx_lo_freq: None,
             current_tx_lo_freq: None,
             current_rx_use_tdd_table: false,
@@ -107,7 +107,7 @@ impl GainState {
             split_gt,
             current_table: gain_control::gain_table_index(
                 split_gt,
-                settings.rx_synth_freq.get().to_raw(),
+                settings.rx_lo_frequency.get().to_raw(),
             ),
             tx_quad_lpf_tia_match: None,
         }
@@ -120,7 +120,7 @@ pub(crate) struct LoadedFir {
     /// decimation (RX) or interpolation (TX)
     pub factor: FirFactor,
     pub ntaps: u32,
-    /// Stays bypassed after loading until someone enables it. no-OS does the same.
+    /// Stays bypassed after loading until someone enables it.
     pub bypassed: bool,
 }
 
@@ -180,12 +180,11 @@ impl CalibrationState {
             dc_offset: settings.dc_offset,
             auto_cal_en: false,
             cal_threshold_freq: 100_000_000,
-            last_tx_quad_cal_freq: settings.tx_synth_freq.get().to_raw(),
-            current_rx_bw: settings.rf_rx_bandwidth.get(),
-            current_tx_bw: settings.rf_tx_bandwidth.get(),
+            last_tx_quad_cal_freq: settings.tx_lo_frequency.get().to_raw(),
+            current_rx_bw: settings.rx_bandwidth.get(),
+            current_tx_bw: settings.tx_bandwidth.get(),
             last_tx_quad_cal_phase: None,
-            rx_phase_inversion: settings.port.rx1rx2_phase_inversion
-                || settings.port.conf2.invert_rx2(),
+            rx_phase_inversion: settings.port.invert.rx2,
         }
     }
 }
@@ -194,8 +193,6 @@ impl CalibrationState {
 pub(crate) struct TuneState {
     pub bist_loopback_mode: BistLoopback,
     pub bist_config: BistConfig,
-    /// DAC sources stashed while ADC data loops back in the FPGA
-    pub scratch_dac_source: [axi_ad9361::regs::dac::regs::ChannelDataSource; 4],
     pub dig_interface_tune: DigInterfaceTune,
     pub dig_interface_tune_fir_disable: bool,
     /// retune on every baseband clock change
@@ -212,13 +209,12 @@ impl TuneState {
         Self {
             bist_loopback_mode: BistLoopback::Off,
             bist_config: BistConfig::default(),
-            scratch_dac_source: [axi_ad9361::regs::dac::regs::ChannelDataSource::default(); 4],
             dig_interface_tune: settings.dig_interface_tune,
             dig_interface_tune_fir_disable: settings.dig_interface_tune_fir_disable,
             bb_clk_change_dig_tune_en: settings.bb_clk_change_dig_tune_en,
             axi_half_dac_rate_en: settings.axi_half_dac_rate_en,
-            rx_clk_data_delay: settings.port.rx_clk_data_delay,
-            tx_clk_data_delay: settings.port.tx_clk_data_delay,
+            rx_clk_data_delay: settings.port.rx_clock_data_delay(),
+            tx_clk_data_delay: settings.port.tx_clock_data_delay(),
         }
     }
 }

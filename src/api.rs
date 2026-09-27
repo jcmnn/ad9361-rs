@@ -1,127 +1,17 @@
-//! The public API: [`Uninitialized`], [`Configured`] and [`Ad9361`], plus the handles
-//! [`ManualRxGain`], [`RxFir`] and [`TxFir`].
+//! The public API: [`Ad9361`] and its handles [`ManualRxGain`], [`RxFir`] and [`TxFir`].
 
-use embedded_hal::spi::SpiDevice;
+use embedded_hal::digital::OutputPin;
+use embedded_hal_async::spi::SpiDevice;
+use fugit::{HertzU32, HertzU64};
 
+use super::interface::{DataInterface, TxSource};
 use super::{
-    Ad9361ClockRates, Ad9361Config, Ad9361Error, InitError, Ad9361Settings, AxiCores, Channel,
-    ConfigError, Engine, GainMode, ProductId, ReferenceClock, RfBandwidth, RxFirConfig, RxLoFrequency, SampleRate, State, TxLoFrequency,
-    TxAttenuation, TxFirConfig, spi,
+    Ad9361ClockRates, Ad9361Config, Ad9361Error, Channel, Channels, DcxoTrim, Engine, GainMode,
+    InitError, InitFailure, ProductId, RfBandwidth, RxFirConfig, RxLoFrequency, SampleRate, State,
+    TxAttenuation, TxFirConfig, TxLoFrequency, spi,
 };
 
-/// AD936X that has not been configured.
-///
-/// Needs:
-///
-/// - a blocking `SpiDevice` for the chip (mode 1, 10 MHz at most, chip select handled by the
-///   device)
-/// - the reset pin, held low until [`Configured::init`]
-/// - the [`ReferenceClock`] frequency the chip runs on
-/// - the [`AxiCores`] of the AXI AD9361 core, taken with `take_adc_no_init()` and
-///   `take_dac_no_init()`
-///
-/// Next is [`Self::configure`].
-pub struct Uninitialized<S: SpiDevice<u8>, R: embedded_hal::digital::OutputPin> {
-    spi: S,
-    resetb: R,
-    ref_clk: ReferenceClock,
-    axi: AxiCores,
-}
-
-impl<S, R> Uninitialized<S, R>
-where
-    S: SpiDevice<u8>,
-    R: embedded_hal::digital::OutputPin,
-{
-    /// Stores the parts. Nothing is sent to the chip.
-    pub fn new(spi: S, resetb: R, ref_clk: ReferenceClock, axi: AxiCores) -> Self {
-        Self { spi, resetb, ref_clk, axi }
-    }
-
-    /// Checks the settings and returns a [`Configured`] if they are valid. Nothing is sent to the
-    /// chip.
-    ///
-    /// Errors are reported here instead of half way through the setup: path clocks over the chip's
-    /// limits, a reference clock that can't reach the synth reference window, settings that don't fit
-    /// their register field, and combinations the chip can't do. See [`ConfigError`].
-    pub fn configure(self, settings: Ad9361Settings) -> Result<Configured<S, R>, ConfigError> {
-        Ok(Configured {
-            config: Ad9361Config::new(settings, self.ref_clk)?,
-            spi: self.spi,
-            resetb: self.resetb,
-            axi: self.axi,
-        })
-    }
-}
-
-/// Checked settings, chip not touched yet.
-///
-/// Call [`Self::init`] to set up the chip.
-pub struct Configured<S: SpiDevice<u8>, R: embedded_hal::digital::OutputPin> {
-    spi: S,
-    resetb: R,
-    axi: AxiCores,
-    config: Ad9361Config,
-}
-
-impl<S, R> Configured<S, R>
-where
-    S: SpiDevice<u8>,
-    R: embedded_hal::digital::OutputPin,
-{
-    /// Resets and sets up the chip. This is `ad9361_init()` from no-OS plus what its `main.c` does
-    /// after it:
-    ///
-    /// 1. pulse the reset pin and check the product ID
-    /// 2. read the clock rates and run the setup (clock chain, synths, ports, gain control,
-    ///    baseband filter and DC offset calibrations, TX quadrature calibration, tracking, RSSI)
-    /// 3. bring up the ADC core and tune the digital interface
-    /// 4. load the FIRs from the settings, still bypassed
-    /// 5. bring up the DAC core with the DDS tones as data source
-    ///
-    /// This takes a while, the calibrations and the tuning wait on the chip.
-    ///
-    /// # Errors
-    ///
-    /// [`InitError::UnsupportedDevice`] means the product ID is wrong. That is usually the SPI
-    /// setup (mode, clock, wiring, chip select). A calibration or lock timeout usually means the
-    /// reference clock or the data interface clock is missing.
-    ///
-    /// The SPI device and reset pin are consumed. After an error the chip is in an undefined state,
-    /// which the reset at the start of the next `init` fixes.
-    pub async fn init(mut self) -> Result<Ad9361<S, R>, InitError<S::Error, R::Error>> {
-        spi::reset(&mut self.resetb)
-            .await
-            .map_err(InitError::ResetPin)?;
-
-        let id = spi::read_reg::<S, ProductId>(&mut self.spi).map_err(Ad9361Error::Spi)?;
-        if id.product_id().value() != 1 {
-            return Err(InitError::UnsupportedDevice { product_id: id.product_id().value() });
-        }
-        let revision = id.revision().value();
-        let ensm_state = spi::read_reg::<S, State>(&mut self.spi)
-            .map_err(Ad9361Error::Spi)?
-            .ensm_state()
-            .value();
-
-        let mut engine = Engine::new(self.spi, self.axi, &self.config, ensm_state).map_err(Ad9361Error::Spi)?;
-        engine.init(&self.config).await?;
-        if let Some(tx_fir) = &self.config.settings.tx_fir {
-            engine.set_tx_fir_config(tx_fir).await.map_err(Ad9361Error::Spi)?;
-        }
-        if let Some(rx_fir) = &self.config.settings.rx_fir {
-            engine.set_rx_fir_config(rx_fir).await.map_err(Ad9361Error::Spi)?;
-        }
-        engine.dac_init().await?;
-        Ok(Ad9361 {
-            engine,
-            _resetb: self.resetb,
-            revision,
-        })
-    }
-}
-
-/// A running chip, returned by [`Configured::init`].
+/// A running AD9361, made by [`Self::init`].
 ///
 /// All methods take `&mut self`. Use a mutex to share it between tasks.
 ///
@@ -131,39 +21,138 @@ where
 /// Dropping it leaves the chip running as it is.
 ///
 /// ```no_run
-/// # use ad9361::{Ad9361, Channel, TxAttenuation};
-/// # use embedded_hal::{digital::OutputPin, spi::SpiDevice};
-/// # async fn example<S: SpiDevice<u8>, R: OutputPin>(mut ad9361: Ad9361<S, R>) {
-/// // less TX power
-/// ad9361.set_tx_attenuation(TxAttenuation::from_db(30)).unwrap();
+/// # #[cfg(feature = "axi")] mod example {
+/// # use ad9361::{Ad9361, AxiCores, Channel, Channels, TxAttenuation, interface::TxSource};
+/// # use axi_ad9361::dds::{DdsScale, IqPair};
+/// # use embedded_hal::digital::OutputPin;
+/// # use embedded_hal_async::spi::SpiDevice;
+/// # use fugit::HertzU32;
+/// # async fn example<S: SpiDevice<u8>, R: OutputPin>(mut ad9361: Ad9361<S, R, AxiCores>) {
+/// // less TX power on both channels
+/// ad9361.set_tx_attenuation(Channels::Both, TxAttenuation::from_db(30)).await.unwrap();
+///
+/// // a tone 1 MHz above the TX LO on TX1, at half of full scale
+/// let sample_rate = ad9361.sample_rate();
+/// let dac = &mut ad9361.interface_mut().dac;
+/// dac.set_tone(IqPair::First, HertzU32::MHz(1), DdsScale::from_fraction(0.5), sample_rate).unwrap();
 ///
 /// // fixed RX1 gain instead of AGC
-/// ad9361.manual_gain(Channel::Ch1).unwrap().set_gain(40).unwrap();
+/// ad9361.manual_gain(Channel::Ch1).await.unwrap().set_gain(40).await.unwrap();
 ///
-/// // let the DMA feed the DAC instead of the DDS tones
-/// ad9361.dac_use_dma_data();
+/// // let the DMA feed the DAC instead of the DDS
+/// ad9361.set_tx_source(TxSource::Dma);
+/// # }
 /// # }
 /// ```
-pub struct Ad9361<S: SpiDevice<u8>, R: embedded_hal::digital::OutputPin> {
-    engine: Engine<S>,
+pub struct Ad9361<S: SpiDevice<u8>, R: OutputPin, I: DataInterface> {
+    engine: Engine<S, I>,
     /// only held so the pin stays high
     _resetb: R,
     revision: u8,
 }
 
-impl<S, R> Ad9361<S, R>
+impl<S, R, I> Ad9361<S, R, I>
 where
     S: SpiDevice<u8>,
-    R: embedded_hal::digital::OutputPin,
+    R: OutputPin,
+    I: DataInterface,
 {
+    /// Resets the chip and sets it up (`ad9361_init()` in no-OS):
+    ///
+    /// 1. pulse the reset pin and check the product ID
+    /// 2. read the clock rates and run the setup (clock chain, synths, ports, gain control,
+    ///    baseband filter and DC offset calibrations, TX quadrature calibration, tracking, RSSI)
+    /// 3. bring up the RX side of the data `interface` and tune the data port
+    /// 4. load the FIRs from the settings, still bypassed
+    /// 5. bring up the TX side of the data `interface`, which picks the TX data source. With
+    ///    [`AxiCores`](crate::AxiCores) that is a DDS tone 3 MHz above the TX LO, at 10% of
+    ///    full scale.
+    ///
+    /// Needs:
+    ///
+    /// - an SPI device for the chip, mode 1 and 10 MHz at most, chip select handled by the
+    ///   device
+    /// - the reset pin, held low until now. The driver keeps it high afterwards
+    /// - the FPGA side of the data port, like [`AxiCores`](crate::AxiCores)
+    /// - the validated settings. `config` isn't consumed, so a failed init can be retried
+    ///
+    /// This takes a while, the calibrations and the tuning wait on the chip.
+    ///
+    /// # Errors
+    ///
+    /// The [`InitFailure`] hands back the SPI device, reset pin and interface. The chip is then
+    /// in an undefined state, which the reset at the start of the next `init` fixes.
+    /// [`InitError::UnsupportedDevice`] means the product ID is wrong, usually the SPI setup
+    /// (mode, clock, wiring, chip select). A calibration or lock timeout usually means the
+    /// reference clock or the data clock is missing.
+    pub async fn init(
+        mut spi: S,
+        mut resetb: R,
+        interface: I,
+        config: &Ad9361Config,
+    ) -> Result<Self, InitFailure<S, R, I>> {
+        let early = async |spi: &mut S, resetb: &mut R| {
+            spi::reset(resetb).await.map_err(InitError::ResetPin)?;
+            let id = spi::read_reg::<S, ProductId>(spi).await.map_err(Ad9361Error::Spi)?;
+            if id.product_id().value() != 1 {
+                return Err(InitError::UnsupportedDevice { product_id: id.product_id().value() });
+            }
+            let ensm_state = spi::read_reg::<S, State>(spi).await.map_err(Ad9361Error::Spi)?;
+            Ok((id.revision().value(), ensm_state.ensm_state().value()))
+        };
+        let (revision, ensm_state) = match early(&mut spi, &mut resetb).await {
+            Ok(result) => result,
+            Err(error) => return Err(InitFailure { error, spi, resetb, interface }),
+        };
+
+        let mut engine = Engine::new(spi, interface, config, ensm_state);
+        let result = async {
+            // no-OS calls this clks_resync
+            engine.init_clocks().await?;
+            engine.init(config).await
+        }
+        .await;
+        match result {
+            Ok(()) => Ok(Ad9361 { engine, _resetb: resetb, revision }),
+            Err(error) => {
+                let (spi, interface) = engine.into_parts();
+                Err(InitFailure { error: InitError::Chip(error), spi, resetb, interface })
+            }
+        }
+    }
+
     /// Silicon revision, read during `init`.
     pub fn revision(&self) -> u8 {
         self.revision
     }
 
-    /// Current clock rates (`rx_sampl` is the RX sample rate, and so on). Cached, so no SPI access.
+    /// Every clock rate of the chip, as it really runs. Cached, so no SPI access.
     pub fn clock_rates(&self) -> &Ad9361ClockRates {
         self.engine.clock_rates()
+    }
+
+    /// RX sample rate, which is also the TX one. The rate the dividers make, can be a little off
+    /// the one asked for.
+    pub fn sample_rate(&self) -> HertzU32 {
+        self.engine.clock_rates().rx_sample
+    }
+
+    /// The RX LO the synth really runs at. The fractional-N synth gets within a few Hz of the
+    /// requested frequency, relative to the reference clock.
+    pub fn rx_lo_frequency(&self) -> HertzU64 {
+        self.engine.clock_rates().rx_rfpll
+    }
+
+    /// The TX LO the synth really runs at, see [`Self::rx_lo_frequency`].
+    pub fn tx_lo_frequency(&self) -> HertzU64 {
+        self.engine.clock_rates().tx_rfpll
+    }
+
+    /// Trims the crystal oscillator (DCXO), to pull the reference clock and with it every
+    /// frequency the chip makes, including the LOs and the sample rate. Does nothing with [`ReferenceSource::External`](crate::ReferenceSource::External).
+    /// Takes effect immediately.
+    pub async fn set_dcxo_trim(&mut self, trim: DcxoTrim) -> Result<(), Ad9361Error<S::Error>> {
+        Ok(self.engine.set_dcxo_trim(trim).await?)
     }
 
     /// Sets the RX and TX sample rate and retunes the digital interface
@@ -174,12 +163,6 @@ where
     /// interpolation or decimation.
     pub async fn set_sample_rate(&mut self, rate: SampleRate) -> Result<(), Ad9361Error<S::Error>> {
         self.engine.set_trx_clock_chain_freq(rate.get()).await
-    }
-
-    /// TX1 attenuation, read from the chip. [`Self::set_tx_attenuation`] sets both channels to the
-    /// same value.
-    pub fn tx_attenuation(&mut self) -> Result<TxAttenuation, Ad9361Error<S::Error>> {
-        Ok(self.engine.tx_atten(false)?)
     }
 
     /// Sets the RX LO and loads the gain table for the new band. Waits for the synth to lock and can
@@ -214,26 +197,89 @@ where
         self.engine.update_rf_bandwidth(rx.get(), tx.get()).await
     }
 
-    /// Sets the TX attenuation on both channels, 0 to 89.75 dB. Takes effect immediately, so the
-    /// output steps.
-    pub fn set_tx_attenuation(&mut self, atten: TxAttenuation) -> Result<(), Ad9361Error<S::Error>> {
-        Ok(self.engine.set_tx_atten(atten, true, true, true)?)
-    }
-
     /// Gain mode of the channel.
     pub fn gain_mode(&self, channel: Channel) -> GainMode {
         self.engine.gain_mode(channel)
     }
 
+    /// Loads RX FIR coefficients and returns the [`RxFir`]. The filter is bypassed until enabled.
+    pub async fn load_rx_fir(
+        &mut self,
+        config: &RxFirConfig,
+    ) -> Result<RxFir<'_, S, R, I>, Ad9361Error<S::Error>> {
+        self.engine.set_rx_fir_config(config).await?;
+        Ok(RxFir { driver: self })
+    }
+
+    /// The RX FIR, or `None` if no coefficients are loaded. The default settings load some.
+    pub fn rx_fir(&mut self) -> Option<RxFir<'_, S, R, I>> {
+        self.engine.fir.rx.is_some().then_some(RxFir { driver: self })
+    }
+
+    /// Loads TX FIR coefficients and returns the [`TxFir`]. The filter is bypassed until enabled.
+    pub async fn load_tx_fir(
+        &mut self,
+        config: &TxFirConfig,
+    ) -> Result<TxFir<'_, S, R, I>, Ad9361Error<S::Error>> {
+        self.engine.set_tx_fir_config(config).await?;
+        Ok(TxFir { driver: self })
+    }
+
+    /// The TX FIR, or `None` if no coefficients are loaded. The default settings load some.
+    pub fn tx_fir(&mut self) -> Option<TxFir<'_, S, R, I>> {
+        self.engine.fir.tx.is_some().then_some(TxFir { driver: self })
+    }
+
+    /// Picks where the TX data comes from. [`TxSource::Dds`] is the state after `init`.
+    ///
+    /// With [`AxiCores`](crate::AxiCores) and [`TxSource::Dma`], the data is one 32 bit word per
+    /// TX channel and sample, channels interleaved ([`Self::dac_num_tx_channels`]), I in the
+    /// lower and Q in the upper half. The DMA has to be running for anything to come out.
+    pub fn set_tx_source(&mut self, source: TxSource) {
+        self.engine.set_tx_source(source);
+    }
+
+    /// The FPGA side of the data port.
+    pub fn interface(&self) -> &I {
+        &self.engine.interface
+    }
+
+    /// The FPGA side of the data port, for things the driver doesn't cover, like the DDS
+    /// tones of [`AxiCores`](crate::AxiCores). Leave the data path setup alone, the driver
+    /// tuned the port for it.
+    pub fn interface_mut(&mut self) -> &mut I {
+        &mut self.engine.interface
+    }
+
+    /// Number of TX channels the DMA data is interleaved for: 2 in 2R2T, 1 in 1R1T.
+    pub fn dac_num_tx_channels(&self) -> usize {
+        self.engine.dac_num_tx_channels()
+    }
+
+    /// TX attenuation of `channel`, read from the chip.
+    pub async fn tx_attenuation(&mut self, channel: Channel) -> Result<TxAttenuation, Ad9361Error<S::Error>> {
+        Ok(self.engine.tx_atten(channel == Channel::Ch2).await?)
+    }
+
+    /// Sets the TX attenuation, 0 to 89.75 dB. Takes effect immediately, so the output steps.
+    pub async fn set_tx_attenuation(
+        &mut self,
+        channels: Channels,
+        atten: TxAttenuation,
+    ) -> Result<(), Ad9361Error<S::Error>> {
+        let (tx1, tx2) = (channels.contains(Channel::Ch1), channels.contains(Channel::Ch2));
+        Ok(self.engine.set_tx_atten(atten, tx1, tx2, true).await?)
+    }
+
     /// Sets the gain mode of the channel. The channel is switched off briefly during the change.
     ///
     /// Use [`Self::manual_gain`] to go to manual mode.
-    pub fn set_gain_mode(
+    pub async fn set_gain_mode(
         &mut self,
         channel: Channel,
         mode: GainMode,
     ) -> Result<(), Ad9361Error<S::Error>> {
-        self.engine.set_gain_mode(channel, mode)
+        self.engine.set_gain_mode(channel, mode).await
     }
 
     /// Switches the channel to manual gain and returns a [`ManualRxGain`] to set the gain.
@@ -243,97 +289,52 @@ where
     /// # Errors
     ///
     /// [`Ad9361Error::UnsupportedGainTable`] with the split gain table.
-    pub fn manual_gain(
+    pub async fn manual_gain(
         &mut self,
         channel: Channel,
-    ) -> Result<ManualRxGain<'_, S, R>, Ad9361Error<S::Error>> {
+    ) -> Result<ManualRxGain<'_, S, R, I>, Ad9361Error<S::Error>> {
         if self.engine.gain.split_gt {
             return Err(Ad9361Error::UnsupportedGainTable);
         }
-        self.engine.set_gain_mode(channel, GainMode::Manual)?;
+        self.engine.set_gain_mode(channel, GainMode::Manual).await?;
         Ok(ManualRxGain { driver: self, channel })
-    }
-
-    /// Loads RX FIR coefficients and returns the [`RxFir`]. The filter is bypassed until enabled,
-    /// like in no-OS.
-    pub async fn load_rx_fir(
-        &mut self,
-        config: &RxFirConfig,
-    ) -> Result<RxFir<'_, S, R>, Ad9361Error<S::Error>> {
-        self.engine.set_rx_fir_config(config).await?;
-        Ok(RxFir { driver: self })
-    }
-
-    /// The RX FIR, or `None` if no coefficients are loaded. The default settings load some.
-    pub fn rx_fir(&mut self) -> Option<RxFir<'_, S, R>> {
-        self.engine.fir.rx.is_some().then_some(RxFir { driver: self })
-    }
-
-    /// Loads TX FIR coefficients and returns the [`TxFir`]. The filter is bypassed until enabled,
-    /// like in no-OS.
-    pub async fn load_tx_fir(
-        &mut self,
-        config: &TxFirConfig,
-    ) -> Result<TxFir<'_, S, R>, Ad9361Error<S::Error>> {
-        self.engine.set_tx_fir_config(config).await?;
-        Ok(TxFir { driver: self })
-    }
-
-    /// The TX FIR, or `None` if no coefficients are loaded. The default settings load some.
-    pub fn tx_fir(&mut self) -> Option<TxFir<'_, S, R>> {
-        self.engine.fir.tx.is_some().then_some(TxFir { driver: self })
-    }
-
-    /// Makes the DAC play the data from its DMA. The data is one 32 bit word per TX channel and
-    /// sample, channels interleaved ([`Self::dac_num_tx_channels`]), I in the lower and Q in the
-    /// upper half. The DMA has to be running for anything to come out.
-    pub fn dac_use_dma_data(&mut self) {
-        self.engine.dac_use_dma_data();
-    }
-
-    /// Makes the DAC play its DDS tones. This is the state after `init`.
-    pub fn dac_use_dds(&mut self) {
-        self.engine.dac_use_dds();
-    }
-
-    /// Number of TX channels the DMA data is interleaved for: 2 in 2R2T, 1 in 1R1T.
-    pub fn dac_num_tx_channels(&self) -> usize {
-        self.engine.dac_num_tx_channels()
     }
 }
 
 /// An RX channel in manual gain mode, from [`Ad9361::manual_gain`].
 ///
 /// Holds the driver mutably, so the gain mode can't change while it exists.
-pub struct ManualRxGain<'a, S: SpiDevice<u8>, R: embedded_hal::digital::OutputPin> {
-    driver: &'a mut Ad9361<S, R>,
+pub struct ManualRxGain<'a, S: SpiDevice<u8>, R: OutputPin, I: DataInterface> {
+    driver: &'a mut Ad9361<S, R, I>,
     channel: Channel,
 }
 
-impl<S, R> ManualRxGain<'_, S, R>
+impl<S, R, I> ManualRxGain<'_, S, R, I>
 where
     S: SpiDevice<u8>,
-    R: embedded_hal::digital::OutputPin,
+    R: OutputPin,
+    I: DataInterface,
 {
     /// Sets the gain in dB and returns the gain that was set.
     ///
     /// The gain table has fixed steps, so the closest entry is used. Values above the table give the
     /// last entry. The table depends on the RX LO, so the same value can give another gain after
     /// [`Ad9361::set_rx_lo_frequency`] changes the band.
-    pub fn set_gain(&mut self, gain_db: i8) -> Result<i8, Ad9361Error<S::Error>> {
-        Ok(self.driver.engine.set_manual_rx_gain(self.channel, gain_db)?)
+    pub async fn set_gain(&mut self, gain_db: i8) -> Result<i8, Ad9361Error<S::Error>> {
+        Ok(self.driver.engine.set_manual_rx_gain(self.channel, gain_db).await?)
     }
 }
 
 /// The RX FIR with coefficients loaded, from [`Ad9361::rx_fir`] or [`Ad9361::load_rx_fir`].
-pub struct RxFir<'a, S: SpiDevice<u8>, R: embedded_hal::digital::OutputPin> {
-    driver: &'a mut Ad9361<S, R>,
+pub struct RxFir<'a, S: SpiDevice<u8>, R: OutputPin, I: DataInterface> {
+    driver: &'a mut Ad9361<S, R, I>,
 }
 
-impl<S, R> RxFir<'_, S, R>
+impl<S, R, I> RxFir<'_, S, R, I>
 where
     S: SpiDevice<u8>,
-    R: embedded_hal::digital::OutputPin,
+    R: OutputPin,
+    I: DataInterface,
 {
     /// Enables or bypasses the filter. The clocks and bandwidths are redone, which fails if the
     /// filter doesn't fit the sample rate. The filter stays bypassed then.
@@ -343,14 +344,15 @@ where
 }
 
 /// The TX FIR with coefficients loaded, from [`Ad9361::tx_fir`] or [`Ad9361::load_tx_fir`].
-pub struct TxFir<'a, S: SpiDevice<u8>, R: embedded_hal::digital::OutputPin> {
-    driver: &'a mut Ad9361<S, R>,
+pub struct TxFir<'a, S: SpiDevice<u8>, R: OutputPin, I: DataInterface> {
+    driver: &'a mut Ad9361<S, R, I>,
 }
 
-impl<S, R> TxFir<'_, S, R>
+impl<S, R, I> TxFir<'_, S, R, I>
 where
     S: SpiDevice<u8>,
-    R: embedded_hal::digital::OutputPin,
+    R: OutputPin,
+    I: DataInterface,
 {
     /// Enables or bypasses the filter. The clocks and bandwidths are redone, which fails if the
     /// filter doesn't fit the sample rate. The filter stays bypassed then.

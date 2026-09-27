@@ -9,11 +9,17 @@ readme = "README.md"
 [dependencies]
 arbitrary-int = "2.2.0"
 bitbybit = "2.0.1"
-axi-ad9361 = { path = "../axi-hdl-rs/axi-ad9361", version = "0.1.0" }
+axi-ad9361 = { path = "../axi-hdl-rs/axi-ad9361", version = "0.1.0", optional = true }
 embassy-time = "0.5"
 embedded-hal = "1"
+embedded-hal-async = "1"
 fugit = "0.5"
 log = "0.4"
+
+[features]
+default = ["axi"]
+# `AxiCores`, the data interface for ADI's AXI AD9361 IP core
+axi = ["dep:axi-ad9361"]
 
 [dev-dependencies]
 embassy-time = { version = "0.5", features = ["mock-driver", "tick-hz-1_000_000"] }

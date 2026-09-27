@@ -4,10 +4,21 @@
 use core::convert::Infallible;
 use std::vec::Vec;
 
-use embedded_hal::spi::{ErrorType, Operation, SpiDevice};
+use embedded_hal_async::spi::{ErrorType, Operation, SpiDevice};
 use fugit::HertzU32;
 
 use super::*;
+use crate::control::EnsmState;
+
+/// Runs a future that has to finish on the first poll. The mock SPI never waits.
+fn block_ready<F: core::future::Future>(future: F) -> F::Output {
+    let mut future = core::pin::pin!(future);
+    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+    match future.as_mut().poll(&mut cx) {
+        core::task::Poll::Ready(value) => value,
+        core::task::Poll::Pending => panic!("future did not finish"),
+    }
+}
 
 /// Fake AD9361 register file. Bit 15 of the first word = write, 14:12 = byte count - 1, 9:0 =
 /// address, counting down per byte.
@@ -28,7 +39,7 @@ impl ErrorType for MockSpi {
 }
 
 impl SpiDevice<u8> for MockSpi {
-    fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Infallible> {
+    async fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Infallible> {
         let [Operation::Write(header), data] = operations else {
             panic!("expected a header and a data operation");
         };
@@ -64,27 +75,50 @@ fn default_config() -> Ad9361Config {
     Ad9361Config::new(Ad9361Settings::default(), ReferenceClock::new(REF_CLK).unwrap()).unwrap()
 }
 
-/// Engine on the fake chip. The AXI cores get zeroed memory, nothing here touches it.
-fn engine() -> Engine<MockSpi> {
-    let memory: &'static mut [u32] = std::boxed::Box::leak(std::vec![0u32; 0x4000].into_boxed_slice());
-    let mut axi = axi_ad9361::AxiAd9361::new(memory.as_mut_ptr() as usize);
-    let cores = AxiCores {
-        adc: axi.take_adc_no_init().unwrap(),
-        dac: axi.take_dac_no_init().unwrap(),
-        core_id: 0,
-    };
-    Engine::new(MockSpi::new(), cores, &default_config(), 0).unwrap()
+/// FPGA side that does nothing and never sees a PN error.
+struct MockInterface;
+
+impl DataInterface for MockInterface {
+    async fn init(&mut self, _: interface::PortLayout) -> Result<(), interface::InterfaceError> {
+        Ok(())
+    }
+    async fn start_tx(
+        &mut self,
+        _: interface::PortLayout,
+        _: HertzU32,
+    ) -> Result<(), interface::InterfaceError> {
+        Ok(())
+    }
+    fn set_tx_source(&mut self, _: interface::PortLayout, _: interface::TxSource) {}
+    fn clear_pn_errors(&mut self, _: interface::PortLayout) {}
+    fn pn_errors(&mut self, _: interface::PortLayout, _: bool) -> bool {
+        false
+    }
+    fn relatch_rx(&mut self) {}
+    fn start_tx_pn(&mut self, _: interface::PortLayout) {}
+    fn stop_tx_pn(&mut self, _: interface::PortLayout) {}
+}
+
+fn engine_with(config: &Ad9361Config) -> Engine<MockSpi, MockInterface> {
+    let mut engine = Engine::new(MockSpi::new(), MockInterface, config, 0);
+    block_ready(engine.init_clocks()).unwrap();
+    engine
+}
+
+/// Engine on the fake chip.
+fn engine() -> Engine<MockSpi, MockInterface> {
+    engine_with(&default_config())
 }
 
 #[test]
 fn spi_write_and_read_use_the_protocol_header() {
     let mut engine = engine();
-    engine.write_bytes(&[0xAB, 0xCD], u10::new(0x274)).unwrap();
+    block_ready(engine.write_bytes(&[0xAB, 0xCD], u10::new(0x274))).unwrap();
     // 0x274, then 0x273
     assert_eq!(engine.spi.writes, [(0x274, 0xAB), (0x273, 0xCD)]);
 
     let mut out = [0u8; 2];
-    engine.read_bytes(&mut out, u10::new(0x274)).unwrap();
+    block_ready(engine.read_bytes(&mut out, u10::new(0x274))).unwrap();
     assert_eq!(out, [0xAB, 0xCD]);
 }
 
@@ -104,7 +138,7 @@ fn tx_attenuation_range_and_steps() {
 #[test]
 fn set_tx_atten_writes_both_bytes_msb_first() {
     let mut engine = engine();
-    engine.set_tx_atten(TxAttenuation::from_quarter_db(300).unwrap(), true, false, true).unwrap();
+    block_ready(engine.set_tx_atten(TxAttenuation::from_quarter_db(300).unwrap(), true, false, true)).unwrap();
     // 300 = 0x12C, 0x74 has bit 8 and 0x73 the low byte
     assert_eq!(engine.spi.regs[0x74], 0x01);
     assert_eq!(engine.spi.regs[0x73], 0x2C);
@@ -164,7 +198,7 @@ fn clock_chain_for_30_72_msps_is_the_default_chain() {
         .calculate_rf_clock_chain(HertzU32::Hz(30_720_000), RateGovernor::Nominal as u32)
         .unwrap();
     assert_eq!(rx, PathClocks::DEFAULT_RX);
-    // DAC runs at the ADC rate when it can, like no-OS. The static chain in main.c uses half
+    // the calculated chain runs the DAC at the ADC rate, the default one at half
     assert_eq!(
         tx,
         PathClocks { converter: HertzU32::Hz(245_760_000), ..PathClocks::DEFAULT_TX }
@@ -203,17 +237,17 @@ fn manual_gain_selects_the_closest_table_entry() {
     let table = engine.gain.current_table;
     let abs = gain_tables::GAIN_TABLES[table].abs_gain;
 
-    let actual = engine.set_manual_rx_gain(Channel::Ch1, 30).unwrap();
+    let actual = block_ready(engine.set_manual_rx_gain(Channel::Ch1, 30)).unwrap();
     assert!((actual - 30).abs() <= 1, "closest entry to 30 dB is {actual} dB");
     let index = abs.iter().position(|g| *g == actual).unwrap();
     assert_eq!(engine.spi.regs[0x109] & 0x7F, index as u8);
 
     // RX2 has its own register
-    engine.set_manual_rx_gain(Channel::Ch2, 10).unwrap();
+    block_ready(engine.set_manual_rx_gain(Channel::Ch2, 10)).unwrap();
     assert_ne!(engine.spi.regs[0x10C] & 0x7F, engine.spi.regs[0x109] & 0x7F);
 
     // above the table, last entry
-    let max = engine.set_manual_rx_gain(Channel::Ch1, 120).unwrap();
+    let max = block_ready(engine.set_manual_rx_gain(Channel::Ch1, 120)).unwrap();
     assert_eq!(max, *abs.last().unwrap());
     assert_eq!(engine.spi.regs[0x109] & 0x7F, (abs.len() - 1) as u8);
 }
@@ -222,10 +256,10 @@ fn manual_gain_selects_the_closest_table_entry() {
 fn ensm_state_is_saved_and_restored() {
     let mut engine = engine();
     engine.spi.regs[State::ADDRESS.value() as usize] = EnsmState::Fdd.raw();
-    let saved = engine.save_ensm_state().unwrap();
+    let saved = block_ready(engine.save_ensm_state()).unwrap();
     engine.spi.regs[State::ADDRESS.value() as usize] = EnsmState::Alert.raw();
-    engine.ensm_restore_state(saved).unwrap();
-    let config = engine.read_reg::<EnsmConfig1>().unwrap();
+    block_ready(engine.ensm_restore_state(saved)).unwrap();
+    let config = block_ready(engine.read_reg::<EnsmConfig1>()).unwrap();
     assert!(config.force_tx_on());
     assert!(!config.force_rx_on());
 }
@@ -233,7 +267,7 @@ fn ensm_state_is_saved_and_restored() {
 #[test]
 fn dcxo_tune_splits_the_fine_value() {
     let mut engine = engine();
-    engine.set_dcxo_tune(u6::new(8), u13::new(5920)).unwrap();
+    block_ready(engine.set_dcxo_trim(DcxoTrim::DEFAULT)).unwrap();
     assert_eq!(engine.spi.regs[DcxoCoarseTune::ADDRESS.value() as usize] & 0x3F, 8);
     // 5920 = 0x1720, low 5 bits then the upper 8
     assert_eq!(engine.spi.regs[DcxoFineTuneLow::ADDRESS.value() as usize] & 0x1F, 0x00);
@@ -273,12 +307,32 @@ fn engine_state_starts_from_the_configuration() {
 }
 
 #[test]
-fn lvds_port_configuration_is_corrected_to_full_rate_dual_port() {
-    let mut port = PortConfig::default();
-    port.conf3 = port.conf3.with_lvds_mode(true).with_half_duplex_mode(true).with_single_port_mode(true);
-    let conf3 = port.sanitized_conf3();
+fn port_config_registers() {
+    let port = PortConfig::default();
+    let conf3 = port.conf3();
     assert!(conf3.lvds_mode());
     assert!(!conf3.half_duplex_mode() && !conf3.single_port_mode() && !conf3.single_data_rate());
+    assert_eq!(port.conf1().raw_value(), 0b1100_1000);
+    assert_eq!(port.rx_clock_data_delay().raw_value(), 0x04);
+    assert_eq!(port.tx_clock_data_delay().raw_value(), 0x70);
+    let (bias, invert) = port.lvds_registers();
+    assert_eq!(bias.raw_value(), 0b0010_0001);
+    assert_eq!(invert, [0xFF, 0x0F]);
+
+    let cmos = PortConfig {
+        mode: PortMode::Cmos(CmosConfig {
+            ports: CmosPorts::FullPort,
+            single_data_rate: true,
+            swap_ports: false,
+            full_duplex_swap_bits: false,
+        }),
+        ..PortConfig::default()
+    };
+    let conf3 = cmos.conf3();
+    assert!(!conf3.lvds_mode() && conf3.full_port() && conf3.single_data_rate());
+    assert!(!conf3.half_duplex_mode() && !conf3.single_port_mode());
+    assert_eq!(LvdsBias::from_mv(450).unwrap().mv(), 450);
+    assert!(LvdsBias::from_mv(500).is_err());
 }
 
 #[test]
@@ -292,6 +346,17 @@ fn settings_that_would_be_truncated_are_rejected() {
     settings.rssi.duration = 0;
     let result = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap());
     assert!(matches!(result, Err(ConfigError::OutOfRange("rssi.duration"))));
+}
+
+#[test]
+fn dac_channel_count_follows_the_channel_mode() {
+    assert_eq!(engine().dac_num_tx_channels(), 2);
+    let settings = Ad9361Settings {
+        channels: ChannelMode::OneByOne { rx: Channel::Ch1, tx: Channel::Ch2 },
+        ..Ad9361Settings::default()
+    };
+    let config = Ad9361Config::new(settings, ReferenceClock::new(REF_CLK).unwrap()).unwrap();
+    assert_eq!(engine_with(&config).dac_num_tx_channels(), 1);
 }
 
 #[test]
